@@ -492,7 +492,7 @@ function Invoke-HardeningOperation {
         Update-Log $OperationName "Executed successfully"
         
     } catch {
-        $errorMessage = "[FAILED] $OperationName`: $($_.Exception.Message)"
+        $errorMessage = "[FAILED] $OperationName : $($_.Exception.Message)"
         Write-Host $errorMessage -ForegroundColor Red
         Write-Host "[ERROR DETAILS] Exception Type: $($_.Exception.GetType().FullName)" -ForegroundColor DarkRed
         if ($_.Exception.InnerException) {
@@ -508,7 +508,7 @@ function Invoke-HardeningOperation {
         Update-Log $OperationName "Failed with error: $($_.Exception.Message)"
         
         if ($IsCritical) {
-            $script:OperationResults.CriticalErrors += "$OperationName`: $($_.Exception.Message)"
+            $script:OperationResults.CriticalErrors += "$OperationName : $($_.Exception.Message)"
             Write-Host "`n[CRITICAL] Operation '$OperationName' failed. This is a critical operation." -ForegroundColor Red
             Write-Log -Level "CRITICAL" -Message "Critical operation failed: $OperationName" -Console
             
@@ -542,31 +542,31 @@ function Test-Prerequisite {
         switch ($PrerequisiteType) {
             "RegistryPath" {
                 if (-not (Test-Path $Value)) {
-                    Write-Host "[WARNING] Registry path not found for $OperationName`: $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Registry path not found: $Value" -Console
+                    Write-Host "[WARNING] Registry path not found for $OperationName : $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : Registry path not found: $Value" -Console
                     return $false
                 }
             }
             "Service" {
                 $service = Get-Service -Name $Value -ErrorAction SilentlyContinue
                 if (-not $service) {
-                    Write-Host "[WARNING] Service not found for $OperationName`: $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Service not found: $Value" -Console
+                    Write-Host "[WARNING] Service not found for $OperationName : $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : Service not found: $Value" -Console
                     return $false
                 }
             }
             "File" {
                 if (-not (Test-Path $Value)) {
-                    Write-Host "[WARNING] File not found for $OperationName`: $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: File not found: $Value" -Console
+                    Write-Host "[WARNING] File not found for $OperationName : $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : File not found: $Value" -Console
                     return $false
                 }
             }
         }
         return $true
     } catch {
-        Write-Host "[WARNING] Prerequisite check error for $OperationName`: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Log -Level "WARNING" -Message "Prerequisite check error for $OperationName`: $($_.Exception.Message)" -Console
+        Write-Host "[WARNING] Prerequisite check error for $OperationName : $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Log -Level "WARNING" -Message "Prerequisite check error for $OperationName : $($_.Exception.Message)" -Console
         return $false
     }
 }
@@ -634,7 +634,7 @@ function Set-RegistryValue {
         return $true
         
     } catch {
-        $errorMessage = "Failed to set registry value $Path\$Name`: $($_.Exception.Message)"
+        $errorMessage = "Failed to set registry value $Path\$Name : $($_.Exception.Message)"
         Write-Host "[ERROR] $errorMessage" -ForegroundColor Red
         Write-Log -Level "ERROR" -Message "$OperationName - $errorMessage" -Console
         throw
@@ -742,7 +742,7 @@ function Initialize-Context {
                     Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$file" -OutFile "$pwd\$filename" -ErrorAction Stop
                     Write-Log -Level "SUCCESS" -Message "Downloaded $filename"
                 } catch {
-                    Write-Log -Level "WARNING" -Message "Failed to download $filename`: $($_.Exception.Message)"
+                    Write-Log -Level "WARNING" -Message "Failed to download $filename : $($_.Exception.Message)"
                     throw "Failed to download required file: $filename"
                 }
             } else {
@@ -1394,7 +1394,7 @@ function Enable-Windows-Defender {
                     New-ItemProperty -Path $path -Name $name -Value $defenderSettings[$path][$name] -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
                     Write-Verbose "Set Defender registry: $path\$name = $($defenderSettings[$path][$name])"
                 } catch {
-                    Write-Log -Level "WARNING" -Message "Could not set Defender registry $path\$name`: $($_.Exception.Message)"
+                    Write-Log -Level "WARNING" -Message "Could not set Defender registry $path\$name : $($_.Exception.Message)"
                 }
             }
         }
@@ -2148,7 +2148,7 @@ function Run-StanfordHarden {
                     Remove-Item -Path $file -Force -ErrorAction Stop
                     Write-Log -Level "SUCCESS" -Message "Removed backdoor file: $fileName"
                 } catch {
-                    Write-Log -Level "WARNING" -Message "Could not remove backdoor file $file`: $($_.Exception.Message)"
+                    Write-Log -Level "WARNING" -Message "Could not remove backdoor file $file : $($_.Exception.Message)"
                 }
             }
         }
