@@ -185,6 +185,12 @@ function Get-OperatingSystemInfo {
         } elseif ($caption -match "Windows 8") {
             $osVersion = "Windows 8"
             $osFamily = "Client8"
+        } elseif ($caption -match "Windows Vista") {
+            $osVersion = "Windows Vista"
+            $osFamily = "ClientVista"
+        } elseif ($caption -match "Windows XP") {
+            $osVersion = "Windows XP"
+            $osFamily = "ClientXP"
         }
         
         $result = [PSCustomObject]@{
@@ -199,6 +205,7 @@ function Get-OperatingSystemInfo {
             ProductType = $productType
         }
         
+        Write-Host "`n[INFO] OS Detection: $($result.OSVersion) (Build $($result.BuildNumber)) - $($result.Edition)" -ForegroundColor Cyan
         Write-Log -Level "INFO" -Message "OS Detection: $($result.OSVersion) (Build $($result.BuildNumber)) - $($result.Edition)"
         
         return $result
@@ -328,9 +335,23 @@ function Initialize-Log {
     Prints the execution summary log.
 #>
 function Print-Log {
-    Write-Host "`n### Script Execution Summary ###`n" -ForegroundColor Green
+    Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
+    Write-Host "### Script Execution Summary ###" -ForegroundColor Green
+    Write-Host ("=" * 60) -ForegroundColor Cyan
     Write-Log -Level "INFO" -Message "=== Execution Summary ===" -Console
     
+    # Display OS information
+    if ($script:OSInfo) {
+        Write-Host "`nOperating System:" -ForegroundColor Yellow
+        Write-Host "  Version: $($script:OSInfo.OSVersion)" -ForegroundColor White
+        Write-Host "  Build: $($script:OSInfo.BuildNumber)" -ForegroundColor White
+        Write-Host "  Edition: $($script:OSInfo.Edition)" -ForegroundColor White
+        Write-Host "  Is Server: $($script:OSInfo.IsServer)" -ForegroundColor White
+        Write-Log -Level "INFO" -Message "OS: $($script:OSInfo.OSVersion) (Build $($script:OSInfo.BuildNumber))"
+    }
+    
+    # Print individual operation results
+    Write-Host "`nIndividual Operations:" -ForegroundColor Yellow
     foreach ($entry in $script:log.GetEnumerator()) {
         $status = $entry.Value
         $color = switch -Wildcard ($status) {
@@ -339,24 +360,39 @@ function Print-Log {
             "*Skipped*" { "Yellow" }
             default { "White" }
         }
-        Write-Host "$($entry.Key): $status" -ForegroundColor $color
+        Write-Host "  $($entry.Key): " -NoNewline -ForegroundColor White
+        Write-Host $status -ForegroundColor $color
         Write-Log -Level "INFO" -Message "$($entry.Key): $status"
     }
     
     # Print operation statistics
-    Write-Host "`n### Operation Statistics ###" -ForegroundColor Cyan
-    Write-Host "Total Operations: $($script:OperationResults.Total)" -ForegroundColor White
-    Write-Host "Successful: $($script:OperationResults.Successful)" -ForegroundColor Green
-    Write-Host "Failed: $($script:OperationResults.Failed)" -ForegroundColor Red
-    Write-Host "Skipped: $($script:OperationResults.Skipped)" -ForegroundColor Yellow
+    Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
+    Write-Host "### Operation Statistics ###" -ForegroundColor Cyan
+    Write-Host ("=" * 60) -ForegroundColor Cyan
+    Write-Host "Total Operations Attempted: $($script:OperationResults.Total)" -ForegroundColor White
+    Write-Host "  Successful Operations: $($script:OperationResults.Successful)" -ForegroundColor Green
+    Write-Host "  Failed Operations: $($script:OperationResults.Failed)" -ForegroundColor Red
+    Write-Host "  Skipped Operations: $($script:OperationResults.Skipped)" -ForegroundColor Yellow
     
     Write-Log -Level "INFO" -Message "Total Operations: $($script:OperationResults.Total)" -Console
     Write-Log -Level "INFO" -Message "Successful: $($script:OperationResults.Successful)" -Console
     Write-Log -Level "INFO" -Message "Failed: $($script:OperationResults.Failed)" -Console
     Write-Log -Level "INFO" -Message "Skipped: $($script:OperationResults.Skipped)" -Console
     
+    # Display skipped operations with reasons
+    if ($script:OperationResults.Skipped -gt 0) {
+        Write-Host "`nSkipped Operations (with reasons):" -ForegroundColor Yellow
+        $skippedOps = $script:log.GetEnumerator() | Where-Object { $_.Value -like "*Skipped*" }
+        foreach ($op in $skippedOps) {
+            Write-Host "  - $($op.Key): $($op.Value)" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Skipped: $($op.Key) - $($op.Value)"
+        }
+    }
+    
     if ($script:OperationResults.CriticalErrors.Count -gt 0) {
-        Write-Host "`n### Critical Errors ###" -ForegroundColor Red
+        Write-Host "`n" + ("=" * 60) -ForegroundColor Red
+        Write-Host "### Critical Errors ###" -ForegroundColor Red
+        Write-Host ("=" * 60) -ForegroundColor Red
         foreach ($error in $script:OperationResults.CriticalErrors) {
             Write-Host "  - $error" -ForegroundColor Red
             Write-Log -Level "CRITICAL" -Message "Critical Error: $error" -Console
@@ -370,6 +406,8 @@ function Print-Log {
             Write-Log -Level "WARNING" -Message "Warning: $warning" -Console
         }
     }
+    
+    Write-Host ("`n" + ("=" * 60)) -ForegroundColor Cyan
 }
 
 #endregion
@@ -407,7 +445,9 @@ function Invoke-HardeningOperation {
         
         [switch]$IsCritical,
         
-        [string[]]$OSCompatibility = @()
+        [string[]]$OSCompatibility = @(),
+        
+        [string]$ProgressMessage = ""
     )
     
     $script:OperationResults.Total++
@@ -415,12 +455,12 @@ function Invoke-HardeningOperation {
     # Check OS compatibility
     if ($OSCompatibility.Count -gt 0) {
         if ($script:OSInfo.OSFamily -notin $OSCompatibility) {
-            $message = "[SKIPPED] Operation '$OperationName' is not compatible with $($script:OSInfo.OSVersion)"
+            $message = "[SKIPPED] Operation '$OperationName' is not compatible with $($script:OSInfo.OSVersion) (OS Family: $($script:OSInfo.OSFamily))"
             Write-Host $message -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message $message
+            Write-Log -Level "WARNING" -Message $message -Console
             $script:OperationResults.Skipped++
             $script:OperationResults.Warnings += $message
-            Update-Log $OperationName "Skipped - OS incompatible"
+            Update-Log $OperationName "Skipped - OS incompatible ($($script:OSInfo.OSFamily))"
             return
         }
     }
@@ -434,21 +474,35 @@ function Invoke-HardeningOperation {
     
     try {
         Write-Host "`n[EXECUTING] $OperationName..." -ForegroundColor Cyan
-        Write-Log -Level "INFO" -Message "Starting operation: $OperationName"
+        if ($ProgressMessage) {
+            Write-Host "[INFO] $ProgressMessage" -ForegroundColor White
+        }
+        Write-Log -Level "INFO" -Message "Starting operation: $OperationName" -Console
+        if ($script:OSInfo) {
+            Write-Host "[INFO] Applying configuration for $($script:OSInfo.OSVersion)..." -ForegroundColor DarkGray
+        }
         
         # Execute the script block
         & $ScriptBlock
         
         $message = "[SUCCESS] $OperationName completed successfully"
         Write-Host $message -ForegroundColor Green
-        Write-Log -Level "SUCCESS" -Message $message
+        Write-Log -Level "SUCCESS" -Message $message -Console
         $script:OperationResults.Successful++
         Update-Log $OperationName "Executed successfully"
         
     } catch {
         $errorMessage = "[FAILED] $OperationName`: $($_.Exception.Message)"
         Write-Host $errorMessage -ForegroundColor Red
+        Write-Host "[ERROR DETAILS] Exception Type: $($_.Exception.GetType().FullName)" -ForegroundColor DarkRed
+        if ($_.Exception.InnerException) {
+            Write-Host "[ERROR DETAILS] Inner Exception: $($_.Exception.InnerException.Message)" -ForegroundColor DarkRed
+        }
         Write-Log -Level "ERROR" -Message $errorMessage -Console
+        Write-Log -Level "ERROR" -Message "Exception Type: $($_.Exception.GetType().FullName)"
+        if ($_.Exception.InnerException) {
+            Write-Log -Level "ERROR" -Message "Inner Exception: $($_.Exception.InnerException.Message)"
+        }
         
         $script:OperationResults.Failed++
         Update-Log $OperationName "Failed with error: $($_.Exception.Message)"
@@ -458,9 +512,11 @@ function Invoke-HardeningOperation {
             Write-Host "`n[CRITICAL] Operation '$OperationName' failed. This is a critical operation." -ForegroundColor Red
             Write-Log -Level "CRITICAL" -Message "Critical operation failed: $OperationName" -Console
             
-            $continue = Read-Host "Continue with remaining operations? (y/n)"
-            if ($continue -ne "y") {
-                throw "Script halted due to critical error in: $OperationName"
+            if (-not $WhatIf) {
+                $continue = Read-Host "Continue with remaining operations? (y/n)"
+                if ($continue -ne "y" -and $continue -ne "Y") {
+                    throw "Script halted due to critical error in: $OperationName"
+                }
             }
         }
     }
@@ -486,28 +542,102 @@ function Test-Prerequisite {
         switch ($PrerequisiteType) {
             "RegistryPath" {
                 if (-not (Test-Path $Value)) {
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Registry path not found: $Value"
+                    Write-Host "[WARNING] Registry path not found for $OperationName`: $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Registry path not found: $Value" -Console
                     return $false
                 }
             }
             "Service" {
                 $service = Get-Service -Name $Value -ErrorAction SilentlyContinue
                 if (-not $service) {
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Service not found: $Value"
+                    Write-Host "[WARNING] Service not found for $OperationName`: $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: Service not found: $Value" -Console
                     return $false
                 }
             }
             "File" {
                 if (-not (Test-Path $Value)) {
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: File not found: $Value"
+                    Write-Host "[WARNING] File not found for $OperationName`: $Value" -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName`: File not found: $Value" -Console
                     return $false
                 }
             }
         }
         return $true
     } catch {
-        Write-Log -Level "WARNING" -Message "Prerequisite check error for $OperationName`: $($_.Exception.Message)"
+        Write-Host "[WARNING] Prerequisite check error for $OperationName`: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Log -Level "WARNING" -Message "Prerequisite check error for $OperationName`: $($_.Exception.Message)" -Console
         return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Sets a registry value with comprehensive error handling and OS-specific validation.
+    
+.DESCRIPTION
+    Creates or updates a registry value with proper error handling, prerequisite checking,
+    and OS-specific path validation.
+#>
+function Set-RegistryValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Name,
+        
+        [Parameter(Mandatory=$true)]
+        [object]$Value,
+        
+        [Parameter(Mandatory=$true)]
+        [ValidateSet("String", "DWord", "QWord", "MultiString", "ExpandString", "Binary")]
+        [string]$PropertyType,
+        
+        [string]$OperationName = "Registry Operation",
+        
+        [switch]$CreatePathIfMissing
+    )
+    
+    try {
+        # Validate prerequisite - check if registry path exists
+        if (-not (Test-Path $Path)) {
+            if ($CreatePathIfMissing) {
+                Write-Host "[INFO] Creating registry path: $Path" -ForegroundColor Cyan
+                New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+                Write-Log -Level "SUCCESS" -Message "Created registry path: $Path"
+            } else {
+                $message = "Registry path not found and CreatePathIfMissing not specified: $Path"
+                Write-Host "[SKIPPED] $message" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "$OperationName - $message" -Console
+                $script:OperationResults.Skipped++
+                return $false
+            }
+        }
+        
+        # Check if property already exists
+        $existingValue = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
+        
+        if ($existingValue) {
+            # Update existing value
+            Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $PropertyType -ErrorAction Stop | Out-Null
+            Write-Host "[SUCCESS] Updated registry value: $Path\$Name = $Value" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Updated registry value: $Path\$Name = $Value"
+        } else {
+            # Create new value
+            New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force -ErrorAction Stop | Out-Null
+            Write-Host "[SUCCESS] Created registry value: $Path\$Name = $Value" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Created registry value: $Path\$Name = $Value"
+        }
+        
+        return $true
+        
+    } catch {
+        $errorMessage = "Failed to set registry value $Path\$Name`: $($_.Exception.Message)"
+        Write-Host "[ERROR] $errorMessage" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "$OperationName - $errorMessage" -Console
+        throw
     }
 }
 
@@ -1181,19 +1311,33 @@ function Enable-Windows-Defender {
     [CmdletBinding()]
     param()
     
-    # Check OS compatibility - Defender may have different names/features on different OS versions
-    $defenderCompatible = @("Client10", "Client11", "Server2016", "Server2019", "Server2022")
+    # Check OS compatibility - Defender availability varies by OS version
+    # Windows 10/11 and Server 2016+ have Windows Defender Antivirus
+    # Windows 7/8 and Server 2008/2012 have Windows Defender (basic)
+    # Windows Server Core may have limited Defender features
+    $defenderCompatible = @("Client7", "Client8", "Client10", "Client11", "Server2008R2", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
     
-    Invoke-HardeningOperation -OperationName "Enable Windows Defender" -OSCompatibility $defenderCompatible -ScriptBlock {
-        Write-Host "Enabling Windows Defender..." -ForegroundColor Cyan
+    Invoke-HardeningOperation -OperationName "Enable Windows Defender" -OSCompatibility $defenderCompatible -ProgressMessage "Enabling and configuring Windows Defender with comprehensive security settings" -ScriptBlock {
+        Write-Host "[INFO] Enabling Windows Defender for $($script:OSInfo.OSVersion)..." -ForegroundColor Cyan
+        Write-Host "[INFO] Defender features may vary by OS version" -ForegroundColor DarkGray
         
         # Start Defender Service
+        Write-Host "[ACTION] Starting Windows Defender service..." -ForegroundColor White
         try {
-            Start-Service -Name WinDefend -ErrorAction Stop
-            Set-Service -Name WinDefend -StartupType Automatic -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Windows Defender service started and set to automatic"
+            # Check if service exists
+            $defenderService = Get-Service -Name WinDefend -ErrorAction SilentlyContinue
+            if (-not $defenderService) {
+                Write-Host "  [WARNING] Windows Defender service (WinDefend) not found on this OS version" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "Windows Defender service not found on $($script:OSInfo.OSVersion)"
+            } else {
+                Start-Service -Name WinDefend -ErrorAction Stop
+                Set-Service -Name WinDefend -StartupType Automatic -ErrorAction Stop
+                Write-Host "  [SUCCESS] Windows Defender service started and set to automatic" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Windows Defender service started and set to automatic"
+            }
         } catch {
-            Write-Log -Level "WARNING" -Message "Could not start Windows Defender service: $($_.Exception.Message)"
+            Write-Host "  [WARNING] Could not start Windows Defender service: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Could not start Windows Defender service: $($_.Exception.Message)" -Console
         }
         
         # Set Defender Policies
@@ -1256,20 +1400,29 @@ function Enable-Windows-Defender {
         }
         
         # Enable Tamper Protection (Windows 10/11 and Server 2019/2022)
+        # OS-specific: Tamper Protection is only available on Windows 10/11 and Server 2019/2022
         if ($script:OSInfo.OSFamily -in "Client10", "Client11", "Server2019", "Server2022") {
+            Write-Host "[ACTION] Enabling Tamper Protection (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
             try {
                 if (-not (Test-Path $defenderFeaturesPath)) {
                     New-Item -Path $defenderFeaturesPath -Force -ErrorAction SilentlyContinue | Out-Null
                 }
                 New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+                Write-Host "  [SUCCESS] Tamper Protection enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled Tamper Protection"
             } catch {
+                Write-Host "  [WARNING] Could not enable Tamper Protection: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Could not enable Tamper Protection: $($_.Exception.Message)"
             }
+        } else {
+            Write-Host "[INFO] Tamper Protection not available on $($script:OSInfo.OSVersion) (requires Windows 10/11 or Server 2019/2022)" -ForegroundColor DarkGray
+            Write-Log -Level "INFO" -Message "Tamper Protection skipped - not available on $($script:OSInfo.OSVersion)"
         }
         
         # Enable Attack Surface Reduction Rules (Windows 10/11 and Server 2019/2022)
+        # OS-specific: ASR rules are only available on Windows 10/11 and Server 2019/2022
         if ($script:OSInfo.OSFamily -in "Client10", "Client11", "Server2019", "Server2022") {
+            Write-Host "[ACTION] Enabling Attack Surface Reduction (ASR) rules (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
             try {
                 $asrRules = @(
                     "75668C1F-73B5-4CF0-BB93-3ECF5CB7CC84",
@@ -1296,10 +1449,15 @@ function Enable-Windows-Defender {
                         Write-Verbose "Could not enable ASR rule $ruleId (may already be enabled or not supported)"
                     }
                 }
+                Write-Host "  [SUCCESS] Attack Surface Reduction rules enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled Attack Surface Reduction rules"
             } catch {
+                Write-Host "  [WARNING] Could not enable all ASR rules: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Could not enable all ASR rules: $($_.Exception.Message)"
             }
+        } else {
+            Write-Host "[INFO] Attack Surface Reduction rules not available on $($script:OSInfo.OSVersion) (requires Windows 10/11 or Server 2019/2022)" -ForegroundColor DarkGray
+            Write-Log -Level "INFO" -Message "ASR rules skipped - not available on $($script:OSInfo.OSVersion)"
         }
         
         # Remove exclusions
@@ -1554,49 +1712,74 @@ function Upgrade-SMB {
     [CmdletBinding()]
     param()
     
-    Invoke-HardeningOperation -OperationName "Upgrade SMB" -ScriptBlock {
-        # Check if SMB module is available
+    # SMB configuration varies by OS version
+    # Get-SmbServerConfiguration is available on Windows Server 2012+ and Windows 8+
+    # Older OS versions may need different approaches
+    $smbUpgradeCompatible = @("Client8", "Client10", "Client11", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
+    
+    Invoke-HardeningOperation -OperationName "Upgrade SMB" -OSCompatibility $smbUpgradeCompatible -ProgressMessage "Enabling SMBv2/v3 and disabling SMBv1 for improved security" -ScriptBlock {
+        # Check if SMB module is available (required for Get-SmbServerConfiguration)
         if (-not (Get-Module -ListAvailable -Name SmbShare)) {
-            Write-Host "SMB module not available. SMB configuration may not work correctly." -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "SMB module not available"
+            Write-Host "[WARNING] SMB module not available. Attempting to import..." -ForegroundColor Yellow
+            try {
+                Import-Module SmbShare -ErrorAction Stop
+                Write-Log -Level "SUCCESS" -Message "Imported SMB module"
+            } catch {
+                Write-Host "[WARNING] Could not import SMB module. SMB configuration may not work correctly." -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "SMB module not available: $($_.Exception.Message)"
+            }
         }
         
         try {
             # Detect the current SMB version
+            Write-Host "[INFO] Detecting current SMB configuration..." -ForegroundColor Cyan
             $smbConfig = Get-SmbServerConfiguration -ErrorAction Stop
             $smbv1Enabled = $smbConfig.EnableSMB1Protocol
             $smbv2Enabled = $smbConfig.EnableSMB2Protocol
+            $smbv3Enabled = $smbConfig.EnableSMB3Protocol -ErrorAction SilentlyContinue
             $restart = $false
             
-            # Enable SMBv2 (SMBv3 is enabled automatically if supported)
+            Write-Host "[INFO] Current SMB Configuration:" -ForegroundColor Cyan
+            Write-Host "  SMBv1: $(if ($smbv1Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv1Enabled) { 'Red' } else { 'Green' })
+            Write-Host "  SMBv2: $(if ($smbv2Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv2Enabled) { 'Green' } else { 'Yellow' })
+            if ($null -ne $smbv3Enabled) {
+                Write-Host "  SMBv3: $(if ($smbv3Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv3Enabled) { 'Green' } else { 'Yellow' })
+            }
+            
+            # Enable SMBv2 (SMBv3 is enabled automatically if supported on Server 2012+ and Windows 8+)
             if ($smbv2Enabled -eq $false) {
+                Write-Host "[ACTION] Enabling SMBv2..." -ForegroundColor Yellow
                 Set-SmbServerConfiguration -EnableSMB2Protocol $true -Force -ErrorAction Stop
-                Write-Host "Upgraded to SMBv2/SMBv3." -ForegroundColor Green
+                Write-Host "[SUCCESS] SMBv2 enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled SMBv2/SMBv3"
                 $restart = $true
             } else {
-                Write-Host "SMBv2 detected. No upgrade required if SMBv3 is supported alongside." -ForegroundColor Cyan
+                Write-Host "[INFO] SMBv2 already enabled" -ForegroundColor Green
                 Write-Log -Level "INFO" -Message "SMBv2 already enabled"
             }
             
-            # Disable SMBv1
+            # Disable SMBv1 (vulnerable protocol)
             if ($smbv1Enabled -eq $true) {
-                Write-Host "SMBv1 detected. Disabling..." -ForegroundColor Yellow
+                Write-Host "[ACTION] Disabling SMBv1 (vulnerable protocol)..." -ForegroundColor Yellow
                 Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction Stop
+                Write-Host "[SUCCESS] SMBv1 disabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Disabled SMBv1"
                 $restart = $true
             } else {
-                Write-Host "SMBv1 already disabled." -ForegroundColor Green
+                Write-Host "[INFO] SMBv1 already disabled" -ForegroundColor Green
                 Write-Log -Level "INFO" -Message "SMBv1 already disabled"
             }
             
             # Restart might be required after these changes
             if ($restart -eq $true) {
-                Write-Host "Please consider restarting the machine for changes to take effect." -ForegroundColor Yellow
+                Write-Host "[WARNING] System restart recommended for SMB changes to take full effect" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "System restart may be required for SMB changes"
+            } else {
+                Write-Host "[SUCCESS] SMB configuration is already optimal" -ForegroundColor Green
             }
         } catch {
-            Write-Log -Level "ERROR" -Message "SMB upgrade failed: $($_.Exception.Message)"
+            Write-Host "[ERROR] SMB upgrade failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "SMB upgrade failed: $($_.Exception.Message)" -Console
             throw
         }
     }
@@ -1610,35 +1793,23 @@ function Patch-Mimikatz {
     [CmdletBinding()]
     param()
     
-    Invoke-HardeningOperation -OperationName "Patch Mimikatz" -ScriptBlock {
+    # WDigest registry path is available on Windows 7 and later
+    # On Windows Server 2008/2008 R2, the path might need to be created
+    $mimikatzCompatible = @("Client7", "Client8", "Client10", "Client11", "Server2008", "Server2008R2", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
+    
+    Invoke-HardeningOperation -OperationName "Patch Mimikatz" -OSCompatibility $mimikatzCompatible -ProgressMessage "Disabling WDigest credential storage to prevent Mimikatz credential extraction" -ScriptBlock {
         $registryPath = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"
         
-        # Check if the registry key exists
-        if (-not (Test-Path $registryPath)) {
-            Write-Host "Registry key path not found: $registryPath. Creating..." -ForegroundColor Yellow
-            try {
-                New-Item -Path $registryPath -Force -ErrorAction Stop | Out-Null
-                Write-Log -Level "SUCCESS" -Message "Created WDigest registry path"
-            } catch {
-                Write-Log -Level "ERROR" -Message "Could not create WDigest registry path: $($_.Exception.Message)"
-                throw
-            }
-        }
+        # OS-specific note: WDigest exists on Windows 7+ and Windows Server 2008+
+        Write-Host "[INFO] This patch disables WDigest credential storage (UseLogonCredential = 0)" -ForegroundColor Cyan
+        Write-Host "[INFO] This prevents Mimikatz from extracting plaintext credentials from memory" -ForegroundColor Cyan
         
-        # Check if the UseLogonCredential value exists
-        $useLogonCredentialExists = Get-ItemProperty -Path $registryPath -Name "UseLogonCredential" -ErrorAction SilentlyContinue
-        
-        if ($useLogonCredentialExists -eq $null) {
-            # Create the UseLogonCredential value and set it to 0
-            New-ItemProperty -Path $registryPath -Name "UseLogonCredential" -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
-            Write-Log -Level "SUCCESS" -Message "Created UseLogonCredential registry value and set to 0"
-        } else {
-            # Set the UseLogonCredential value to 0
-            Set-ItemProperty -Path $registryPath -Name "UseLogonCredential" -Value 0 -Type DWord -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Set UseLogonCredential registry value to 0"
-        }
+        # Use the helper function with CreatePathIfMissing since WDigest path might not exist on older OS versions
+        Set-RegistryValue -Path $registryPath -Name "UseLogonCredential" -Value 0 -PropertyType "DWord" -OperationName "Patch Mimikatz" -CreatePathIfMissing
         
         Write-Host "Mimikatz (WDigest) patch applied successfully" -ForegroundColor Green
+        Write-Host "[INFO] System restart recommended for changes to take full effect" -ForegroundColor Yellow
+        Write-Log -Level "SUCCESS" -Message "Mimikatz patch (WDigest) applied - UseLogonCredential set to 0"
     }
 }
 
@@ -1650,90 +1821,139 @@ function Run-Windows-Updates {
     [CmdletBinding()]
     param()
     
-    Invoke-HardeningOperation -OperationName "Run Windows Updates" -ScriptBlock {
-        Write-Host "Clearing Windows Update cache..." -ForegroundColor Cyan
+    Invoke-HardeningOperation -OperationName "Run Windows Updates" -ProgressMessage "Checking for and installing Windows Updates (this may take a while)" -ScriptBlock {
+        Write-Host "[STEP 1/4] Clearing Windows Update cache..." -ForegroundColor Cyan
         
         try {
+            Write-Host "  [ACTION] Stopping Windows Update service..." -ForegroundColor White
             Stop-Service -Name wuauserv -Force -ErrorAction Stop
+            Write-Host "  [SUCCESS] Windows Update service stopped" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Stopped Windows Update service"
         } catch {
+            Write-Host "  [WARNING] Could not stop Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "Could not stop Windows Update service: $($_.Exception.Message)"
         }
         
         try {
             if (Test-Path "C:\Windows\SoftwareDistribution") {
+                Write-Host "  [ACTION] Clearing SoftwareDistribution folder..." -ForegroundColor White
                 Remove-Item -Path "C:\Windows\SoftwareDistribution\*" -Recurse -Force -ErrorAction Stop
+                Write-Host "  [SUCCESS] Windows Update cache cleared" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Cleared Windows Update cache"
+            } else {
+                Write-Host "  [INFO] SoftwareDistribution folder not found, nothing to clear" -ForegroundColor Gray
             }
         } catch {
+            Write-Host "  [WARNING] Could not clear Windows Update cache: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "Could not clear Windows Update cache: $($_.Exception.Message)"
         }
         
         try {
+            Write-Host "  [ACTION] Starting Windows Update service..." -ForegroundColor White
             Start-Service -Name wuauserv -ErrorAction Stop
+            Write-Host "  [SUCCESS] Windows Update service started" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Started Windows Update service"
         } catch {
+            Write-Host "  [WARNING] Could not start Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "Could not start Windows Update service: $($_.Exception.Message)"
         }
         
         # Check for disk space
+        Write-Host "[STEP 2/4] Checking disk space..." -ForegroundColor Cyan
         try {
             $diskSpace = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object -ExpandProperty FreeSpace
+            $freeSpaceGB = [math]::Round($diskSpace / 1GB, 2)
+            Write-Host "  [INFO] Free disk space: $freeSpaceGB GB" -ForegroundColor White
+            
             if ($diskSpace -lt 1073741824) { # 1 GB in bytes
-                Write-Host "Insufficient disk space available on the system drive. Please free up disk space and try again." -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Insufficient disk space for Windows Updates"
+                Write-Host "  [ERROR] Insufficient disk space available on the system drive. Please free up disk space and try again." -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Insufficient disk space for Windows Updates" -Console
                 throw "Insufficient disk space"
+            } else {
+                Write-Host "  [SUCCESS] Sufficient disk space available" -ForegroundColor Green
             }
         } catch {
-            Write-Log -Level "WARNING" -Message "Could not check disk space: $($_.Exception.Message)"
+            if ($_.Exception.Message -ne "Insufficient disk space") {
+                Write-Host "  [WARNING] Could not check disk space: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "Could not check disk space: $($_.Exception.Message)"
+            } else {
+                throw
+            }
         }
         
         # Check for updates using COM object
+        Write-Host "[STEP 3/4] Searching for available updates..." -ForegroundColor Cyan
         try {
-            Write-Host "Searching for available updates..." -ForegroundColor Cyan
+            Write-Host "  [INFO] Connecting to Windows Update service..." -ForegroundColor White
             $wuSession = New-Object -ComObject Microsoft.Update.Session
             $wuSearcher = $wuSession.CreateUpdateSearcher()
+            
+            Write-Host "  [INFO] Searching for updates (this may take several minutes)..." -ForegroundColor White
             $updates = $wuSearcher.Search("IsInstalled=0")
             
             if ($updates.Updates.Count -gt 0) {
-                Write-Host "Found $($updates.Updates.Count) update(s) to install" -ForegroundColor Green
-                Write-Log -Level "INFO" -Message "Found $($updates.Updates.Count) update(s) to install"
+                Write-Host "  [SUCCESS] Found $($updates.Updates.Count) update(s) to install" -ForegroundColor Green
+                Write-Log -Level "INFO" -Message "Found $($updates.Updates.Count) update(s) to install" -Console
                 
                 $totalUpdates = $updates.Updates.Count
                 $updateCounter = 0
+                $successfulUpdates = 0
+                $failedUpdates = 0
+                
+                Write-Host "[STEP 4/4] Installing updates..." -ForegroundColor Cyan
+                Write-Host "  [INFO] This process may take a significant amount of time..." -ForegroundColor Yellow
                 
                 # Initialize progress bar
-                Write-Progress -Activity "Installing updates" -Status "0% Complete" -PercentComplete 0
+                Write-Progress -Activity "Installing Windows Updates" -Status "0% Complete" -PercentComplete 0
                 
                 $updates.Updates | ForEach-Object {
                     $updateCounter++
                     $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
-                    Write-Progress -Activity "Installing updates" -Status "$percentComplete% Complete - $($_.Title)" -PercentComplete $percentComplete
+                    Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($_.Title)" -PercentComplete $percentComplete
                     
-                    Write-Host "Installing: $($_.Title)" -ForegroundColor Cyan
+                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates: $($_.Title)" -ForegroundColor Cyan
                     
                     # Install update
                     try {
-                        $installResult = $wuSession.CreateUpdateInstaller().Install($_)
+                        $installer = $wuSession.CreateUpdateInstaller()
+                        $installer.AddUpdate($_) | Out-Null
+                        $installResult = $installer.Install()
+                        
                         if ($installResult.ResultCode -eq 2) {
+                            Write-Host "    [SUCCESS] Update installed successfully" -ForegroundColor Green
                             Write-Log -Level "SUCCESS" -Message "Installed update: $($_.Title)"
+                            $successfulUpdates++
+                        } elseif ($installResult.ResultCode -eq 3010) {
+                            Write-Host "    [SUCCESS] Update installed (restart required)" -ForegroundColor Green
+                            Write-Log -Level "SUCCESS" -Message "Installed update (restart required): $($_.Title)"
+                            $successfulUpdates++
                         } else {
+                            Write-Host "    [WARNING] Update installation returned code $($installResult.ResultCode): $($_.Title)" -ForegroundColor Yellow
                             Write-Log -Level "WARNING" -Message "Update installation returned code $($installResult.ResultCode): $($_.Title)"
+                            $failedUpdates++
                         }
                     } catch {
+                        Write-Host "    [ERROR] Failed to install update: $($_.Exception.Message)" -ForegroundColor Red
                         Write-Log -Level "ERROR" -Message "Failed to install update $($_.Title): $($_.Exception.Message)"
+                        $failedUpdates++
                     }
                 }
                 
-                Write-Progress -Activity "Installing updates" -Completed
-                Write-Host "Updates installation process completed." -ForegroundColor Green
+                Write-Progress -Activity "Installing Windows Updates" -Completed
+                Write-Host "  [INFO] Update installation summary:" -ForegroundColor Cyan
+                Write-Host "    Successful: $successfulUpdates" -ForegroundColor Green
+                Write-Host "    Failed: $failedUpdates" -ForegroundColor $(if ($failedUpdates -eq 0) { "Green" } else { "Red" })
+                Write-Host "[SUCCESS] Windows Updates installation process completed." -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Windows Updates completed: $successfulUpdates succeeded, $failedUpdates failed" -Console
             } else {
-                Write-Host "No updates available." -ForegroundColor Green
-                Write-Log -Level "INFO" -Message "No updates available"
+                Write-Host "  [INFO] No updates available - system is up to date" -ForegroundColor Green
+                Write-Log -Level "INFO" -Message "No updates available" -Console
             }
         } catch {
-            Write-Log -Level "ERROR" -Message "Windows Update search/installation failed: $($_.Exception.Message)"
-            Write-Host "Windows Update process encountered an error. You may need to run Windows Update manually." -ForegroundColor Yellow
+            Write-Host "  [ERROR] Windows Update search/installation failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "Windows Update search/installation failed: $($_.Exception.Message)" -Console
+            Write-Host "[WARNING] Windows Update process encountered an error. You may need to run Windows Update manually." -ForegroundColor Yellow
+            throw
         }
     }
 }
@@ -1977,38 +2197,41 @@ function Run-StanfordHarden {
             Write-Log -Level "WARNING" -Message "Could not enable all auditing: $($_.Exception.Message)"
         }
         
-        # Additional hardening steps
+        # Additional hardening steps with OS-specific validation
+        Write-Host "[INFO] Applying additional registry hardening..." -ForegroundColor Cyan
         $additionalRegHardening = @(
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Lsa"; Name="NoLmHash"; Value=1},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Lsa"; Name="LmCompatibilityLevel"; Value=5},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"; Name="UseLogonCredential"; Value=0},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="LocalAccountTokenFilterPolicy"; Value=0},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Lsa"; Name="RunAsPPL"; Value=1},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-TCP"; Name="UserAuthentication"; Value=1},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server"; Name="AllowTSConnections"; Value=1},
-            @{Path="HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server"; Name="fDenyTSConnections"; Value=0},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="EnableLUA"; Value=1},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="ConsentPromptBehaviorAdmin"; Value=2},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="ConsentPromptBehaviorUser"; Value=0},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="PromptOnSecureDesktop"; Value=1},
-            @{Path="HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="EnableInstallerDetection"; Value=1}
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"; Name="NoLmHash"; Value=1; Description="Disable LM hash storage"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"; Name="LmCompatibilityLevel"; Value=5; Description="Require NTLMv2 authentication"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"; Name="UseLogonCredential"; Value=0; Description="Disable WDigest credential storage"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="LocalAccountTokenFilterPolicy"; Value=0; Description="Disable remote UAC for local accounts"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"; Name="RunAsPPL"; Value=1; Description="Enable LSASS Protection"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-TCP"; Name="UserAuthentication"; Value=1; Description="Require Network Level Authentication for RDP"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"; Name="AllowTSConnections"; Value=1; Description="Allow Terminal Services connections"},
+            @{Path="HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"; Name="fDenyTSConnections"; Value=0; Description="Do not deny TS connections"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="EnableLUA"; Value=1; Description="Enable User Account Control"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="ConsentPromptBehaviorAdmin"; Value=2; Description="UAC prompt behavior for admins"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="ConsentPromptBehaviorUser"; Value=0; Description="UAC prompt behavior for users"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="PromptOnSecureDesktop"; Value=1; Description="Prompt on secure desktop"},
+            @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name="EnableInstallerDetection"; Value=1; Description="Enable installer detection"}
         )
+        
+        $regSuccessCount = 0
+        $regFailureCount = 0
         
         foreach ($reg in $additionalRegHardening) {
             try {
-                $regPath = $reg.Path -replace "HKLM\\", "HKLM:\"
-                if (-not (Test-Path $regPath)) {
-                    $parentPath = Split-Path $regPath -Parent
-                    if (-not (Test-Path $parentPath)) {
-                        New-Item -Path $parentPath -Force -ErrorAction SilentlyContinue | Out-Null
-                    }
-                }
-                New-ItemProperty -Path $regPath -Name $reg.Name -Value $reg.Value -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+                Write-Host "  [ACTION] Setting $($reg.Name): $($reg.Description)" -ForegroundColor Cyan
+                Set-RegistryValue -Path $reg.Path -Name $reg.Name -Value $reg.Value -PropertyType "DWord" -OperationName "Stanford Harden - $($reg.Name)" -CreatePathIfMissing
+                $regSuccessCount++
             } catch {
-                Write-Verbose "Could not set registry: $($reg.Path)\$($reg.Name)"
+                Write-Host "  [WARNING] Could not set registry: $($reg.Path)\$($reg.Name) - $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "Could not set registry: $($reg.Path)\$($reg.Name) - $($_.Exception.Message)"
+                $regFailureCount++
             }
         }
-        Write-Log -Level "SUCCESS" -Message "Applied additional registry hardening"
+        
+        Write-Host "[INFO] Registry hardening: $regSuccessCount succeeded, $regFailureCount failed" -ForegroundColor $(if ($regFailureCount -eq 0) { "Green" } else { "Yellow" })
+        Write-Log -Level "SUCCESS" -Message "Applied additional registry hardening ($regSuccessCount values set)"
         
         Write-Host "Stanford hardening completed successfully" -ForegroundColor Green
     }
@@ -2325,10 +2548,24 @@ Write-Log -Level "INFO" -Message "=== Script Execution Completed ===" -Console
 Write-Log -Level "INFO" -Message "Log file location: $script:LogFile" -Console
 
 # Determine final status
-if ($script:OperationResults.Failed -eq 0 -and $script:OperationResults.CriticalErrors.Count -eq 0) {
-    Write-Host "`n[SUCCESS] Hardening completed successfully!" -ForegroundColor Green
+Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
+if ($script:OperationResults.Failed -eq 0 -and $script:OperationResults.CriticalErrors.Count -eq 0 -and $script:OperationResults.Skipped -eq 0) {
+    Write-Host "[SUCCESS] Hardening completed successfully!" -ForegroundColor Green
+    Write-Host "All $($script:OperationResults.Total) operation(s) completed without errors." -ForegroundColor Green
+    Write-Log -Level "SUCCESS" -Message "=== Hardening completed successfully ===" -Console
+} elseif ($script:OperationResults.Failed -eq 0 -and $script:OperationResults.CriticalErrors.Count -eq 0) {
+    Write-Host "[SUCCESS] Hardening completed with warnings!" -ForegroundColor Green
+    Write-Host "All operations completed, but $($script:OperationResults.Skipped) operation(s) were skipped (see details above)." -ForegroundColor Yellow
+    Write-Log -Level "SUCCESS" -Message "=== Hardening completed with warnings ===" -Console
 } else {
-    Write-Host "`n[WARNING] Hardening completed with errors - review the summary above" -ForegroundColor Yellow
+    Write-Host "[WARNING] Hardening completed with errors - review the summary above" -ForegroundColor Yellow
+    Write-Host "Failed Operations: $($script:OperationResults.Failed)" -ForegroundColor Red
+    Write-Host "Critical Errors: $($script:OperationResults.CriticalErrors.Count)" -ForegroundColor Red
+    if ($script:OperationResults.CriticalErrors.Count -gt 0) {
+        Write-Host "`nCritical errors occurred. Please review the errors above before considering the system hardened." -ForegroundColor Red
+    }
+    Write-Log -Level "ERROR" -Message "=== Hardening completed with errors ===" -Console
 }
+Write-Host ("=" * 60) -ForegroundColor Cyan
 
 #endregion
