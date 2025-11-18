@@ -1736,7 +1736,14 @@ function Upgrade-SMB {
             $smbConfig = Get-SmbServerConfiguration -ErrorAction Stop
             $smbv1Enabled = $smbConfig.EnableSMB1Protocol
             $smbv2Enabled = $smbConfig.EnableSMB2Protocol
-            $smbv3Enabled = $smbConfig.EnableSMB3Protocol -ErrorAction SilentlyContinue
+            # EnableSMB3Protocol property may not exist on all OS versions, use try-catch
+            $smbv3Enabled = $null
+            try {
+                $smbv3Enabled = $smbConfig.EnableSMB3Protocol
+            } catch {
+                # Property doesn't exist on this OS version
+                $smbv3Enabled = $null
+            }
             $restart = $false
             
             Write-Host "[INFO] Current SMB Configuration:" -ForegroundColor Cyan
@@ -1911,7 +1918,7 @@ function Run-Windows-Updates {
                     $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
                     Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($_.Title)" -PercentComplete $percentComplete
                     
-                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates: $($_.Title)" -ForegroundColor Cyan
+                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates : $($_.Title)" -ForegroundColor Cyan
                     
                     # Install update
                     try {
