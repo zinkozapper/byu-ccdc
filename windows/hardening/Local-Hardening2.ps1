@@ -2169,7 +2169,8 @@ function Run-Windows-Updates {
         $script:WindowsUpdateStatus = "Unknown"
         try {
             Write-Host "  [INFO] Connecting to Windows Update service..." -ForegroundColor White
-            $wuSession = New-Object -ComObject Microsoft.Update.Session            $wuSearcher = $wuSession.CreateUpdateSearcher()            
+            $wuSession = New-Object -ComObject Microsoft.Update.Session
+            $wuSearcher = $wuSession.CreateUpdateSearcher()
             Write-Host "  [INFO] Searching for updates (this may take several minutes)..." -ForegroundColor White
             $searchResult = $wuSearcher.Search("IsInstalled=0 and Type='Software'")            
             if ($searchResult.Updates.Count -gt 0) {
