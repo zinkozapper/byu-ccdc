@@ -2227,7 +2227,9 @@ function Run-Windows-Updates {
                     
                     # Install update
                     try {
-                        $installer = $wuSession.CreateUpdateInstaller()                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl                        $updatesToInstall.Add($update) | Out-Null
+                        $installer = $wuSession.CreateUpdateInstaller()
+                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+                        $updatesToInstall.Add($update) | Out-Null
                         $installer.Updates = $updatesToInstall
                         $installResult = $installer.Install()                        
                         if ($installResult.ResultCode -eq 2) {
