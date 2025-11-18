@@ -803,6 +803,33 @@ function Initialize-Context {
 
 <#
 .SYNOPSIS
+    Initializes the system by setting up logging and context.
+    This function combines Initialize-Log and Initialize-Context to ensure
+    proper system initialization before running hardening operations.
+#>
+function Initialize-System {
+    [CmdletBinding()]
+    param()
+    
+    Write-Host "`nInitializing system..." -ForegroundColor Cyan
+    
+    try {
+        # Initialize function execution log
+        Initialize-Log
+        
+        # Initialize context (downloads files, sets variables)
+        Initialize-Context
+        
+        Write-Host "Initialization complete" -ForegroundColor Green
+    } catch {
+        Write-Host "Initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "System initialization failed: $($_.Exception.Message)" -Console
+        throw "System initialization failed: $($_.Exception.Message)"
+    }
+}
+
+<#
+.SYNOPSIS
     Prompts user for competition usernames.
 #>
 function GetCompetitionUsers {
@@ -1720,15 +1747,8 @@ function Quick-Harden {
         Write-Host "`n=== QUICK HARDENING STARTED ===" -ForegroundColor Green
         Write-Host "This will perform essential hardening steps automatically..." -ForegroundColor Yellow
         
-        # Step 0: Initialize Context (A command)
-        Write-Host "`n0. Initializing context..." -ForegroundColor Cyan
-        try {
-            Initialize-Context
-            Write-Host "Context initialized successfully" -ForegroundColor Green
-        } catch {
-            Write-Host "Context initialization failed: $($_.Exception.Message)" -ForegroundColor Red
-            throw "Context initialization failed: $($_.Exception.Message)"
-        }
+        # Call initialization first
+        Initialize-System
         
         # Step 1: Disable all users except current one
         Write-Host "`n1. Disabling all users except current user..." -ForegroundColor Cyan
@@ -2770,7 +2790,7 @@ while ($true) {
     try {
         switch ($choice) {
             '0' { Print-Log }
-            'A' { Initialize-Context }
+            'A' { Initialize-System }
             '1' { Run-All }
             '2' { Write-Host "`n***Quick Hardening (Essential Steps Only)...***" -ForegroundColor Magenta; Quick-Harden }
             '3' { Write-Host "`n***Getting Competition Users...***" -ForegroundColor Magenta; GetCompetitionUsers }
