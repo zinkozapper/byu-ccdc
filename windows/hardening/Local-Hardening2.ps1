@@ -65,6 +65,9 @@ $script:IsServerCore = $false
 $script:CurrentUser = $null
 $script:UserArray = @()
 $script:PortsObject = $null
+$script:DefenderStatus = "Unknown"
+$script:WindowsUpdateStatus = "Unknown"
+$script:EternalBlueStatus = "Unknown"
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -73,8 +76,8 @@ $functionNames = @(
     "Initialize Context", "Get Competition Users", "Disable Users", "Enable Windows Defender", 
     "Quick Harden", "Add Competition Users", "Remove RDP Users", "Configure Firewall", 
     "Disable Unnecessary Services", "Enable Advanced Auditing", "Configure Splunk", 
-    "Install EternalBlue Patch", "Upgrade SMB", "Patch Mimikatz", "Run Windows Updates", 
-    "Run Stanford Harden", "Set Execution Policy"
+    "EternalBlue Mitigated", "Upgrade SMB", "Patch Mimikatz", "Run Windows Updates", 
+    "Set Execution Policy"
 )
 
 $script:log = @{}
@@ -342,10 +345,41 @@ function Print-Log {
     # Print individual operation results
     Write-Host "`nIndividual Operations:" -ForegroundColor Yellow
     foreach ($entry in $script:log.GetEnumerator()) {
+        # Skip Stanford Harden in executive summary
+        if ($entry.Key -eq "Run Stanford Harden") {
+            continue
+        }
+        
         $status = $entry.Value
+        
+        # Override status with actual system state for Windows Update and Defender
+        if ($entry.Key -eq "Run Windows Updates" -and $script:WindowsUpdateStatus) {
+            if ($script:WindowsUpdateStatus -eq "Completed") {
+                $status = "Completed"
+            } elseif ($script:WindowsUpdateStatus -like "Completed*") {
+                $status = $script:WindowsUpdateStatus
+            } elseif ($script:WindowsUpdateStatus -like "Failed*") {
+                $status = $script:WindowsUpdateStatus
+            }
+        }
+        
+        if ($entry.Key -eq "Enable Windows Defender" -and $script:DefenderStatus) {
+            if ($script:DefenderStatus -eq "Enabled") {
+                $status = "Enabled"
+            } elseif ($script:DefenderStatus -eq "Disabled") {
+                $status = "Disabled/Failed"
+            } else {
+                $status = "$status (Status: $script:DefenderStatus)"
+            }
+        }
+        
         $color = switch -Wildcard ($status) {
             "*successfully*" { "Green" }
+            "*Enabled*" { "Green" }
+            "*Completed*" { "Green" }
+            "*Mitigated*" { "Green" }
             "*Failed*" { "Red" }
+            "*Disabled*" { "Red" }
             "*Skipped*" { "Yellow" }
             default { "White" }
         }
@@ -792,6 +826,22 @@ function GetCompetitionUsers {
         # Write the usernames to users.txt in the current directory
         Set-Content -Path ".\users.txt" -Value $content -ErrorAction Stop
         
+        # Wait a moment to ensure file system has updated
+        Start-Sleep -Milliseconds 500
+        
+        # Verify file was created and has content
+        if (-not (Test-Path ".\users.txt")) {
+            throw "users.txt was not created successfully"
+        }
+        
+        $verifyContent = Get-Content ".\users.txt" -ErrorAction Stop
+        if ($verifyContent.Count -eq 0) {
+            throw "users.txt is empty after creation"
+        }
+        
+        # Update the global UserArray variable
+        [string[]]$script:UserArray = $verifyContent
+        
         # Notify the user that the file has been created
         Write-Host "The file users.txt has been created with the provided usernames." -ForegroundColor Green
         Write-Log -Level "SUCCESS" -Message "Created users.txt with usernames: $user1, $user2"
@@ -834,7 +884,24 @@ function Disable-AllUsers {
     try {
         $currentSamAccountName = $script:CurrentUser.Split('\')[-1]
         
-        $usersToDisable = Get-LocalUser | Where-Object { $_.SamAccountName -ne $currentSamAccountName -and $_.Enabled -eq $true }
+        # Get competition users from users.txt if it exists
+        $competitionUsers = @()
+        if (Test-Path ".\users.txt") {
+            try {
+                Start-Sleep -Milliseconds 500  # Ensure file is fully written
+                $competitionUsers = Get-Content ".\users.txt" -ErrorAction Stop
+            } catch {
+                Write-Log -Level "WARNING" -Message "Could not read users.txt for competition users: $($_.Exception.Message)"
+            }
+        }
+        
+        # Get all LOCAL users (not AD users) that are enabled
+        # Exclude current user and competition users
+        $usersToDisable = Get-LocalUser | Where-Object { 
+            $_.Enabled -eq $true -and 
+            $_.Name -ne $currentSamAccountName -and 
+            $_.Name -notin $competitionUsers
+        }
         
         if ($usersToDisable.Count -eq 0) {
             Write-Host "No users to disable." -ForegroundColor Yellow
@@ -925,6 +992,32 @@ function Add-Competition-Users {
     param()
     
     Invoke-HardeningOperation -OperationName "Add Competition Users" -ScriptBlock {
+        # Check if users.txt exists and has content
+        if (-not (Test-Path ".\users.txt")) {
+            Write-Host "users.txt not found. Please run 'Get Competition Users' first." -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "users.txt not found"
+            throw "users.txt not found"
+        }
+        
+        # Wait a moment to ensure file is fully written if it was just created
+        Start-Sleep -Milliseconds 500
+        
+        # Read users from file with error handling
+        try {
+            $users = Get-Content ".\users.txt" -ErrorAction Stop
+            if ($users.Count -eq 0) {
+                Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "users.txt is empty"
+                throw "users.txt is empty"
+            }
+            # Update the global UserArray
+            [string[]]$script:UserArray = $users
+        } catch {
+            Write-Host "Failed to read users.txt: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "Failed to read users.txt: $($_.Exception.Message)"
+            throw "Failed to read users.txt: $($_.Exception.Message)"
+        }
+        
         if ($script:UserArray.Count -eq 0) {
             Write-Host "No users defined in users.txt. Please run 'Get Competition Users' first." -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "No users defined in users.txt"
@@ -1012,6 +1105,32 @@ function Remove-RDP-Users {
     param()
     
     Invoke-HardeningOperation -OperationName "Remove RDP Users" -ScriptBlock {
+        # Check if users.txt exists and has content
+        if (-not (Test-Path ".\users.txt")) {
+            Write-Host "users.txt not found. Please run 'Get Competition Users' first." -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "users.txt not found for RDP removal"
+            throw "users.txt not found"
+        }
+        
+        # Wait a moment to ensure file is fully written if it was just created
+        Start-Sleep -Milliseconds 500
+        
+        # Read users from file with error handling
+        try {
+            $users = Get-Content ".\users.txt" -ErrorAction Stop
+            if ($users.Count -eq 0) {
+                Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "users.txt is empty for RDP removal"
+                throw "users.txt is empty"
+            }
+            # Update the global UserArray
+            [string[]]$script:UserArray = $users
+        } catch {
+            Write-Host "Failed to read users.txt: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "Failed to read users.txt: $($_.Exception.Message)"
+            throw "Failed to read users.txt: $($_.Exception.Message)"
+        }
+        
         if ($script:UserArray.Count -lt 2) {
             Write-Host "Insufficient users defined. Need at least 2 users in users.txt" -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "Insufficient users defined for RDP removal"
@@ -1297,9 +1416,15 @@ function Enable-Windows-Defender {
     # Windows Server Core may have limited Defender features
     $defenderCompatible = @("Client7", "Client8", "Client10", "Client11", "Server2008R2", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
     
+    # Track status for executive report
+    $script:DefenderStatus = "Unknown"
+    
     Invoke-HardeningOperation -OperationName "Enable Windows Defender" -OSCompatibility $defenderCompatible -ProgressMessage "Enabling and configuring Windows Defender with comprehensive security settings" -ScriptBlock {
         Write-Host "[INFO] Enabling Windows Defender for $($script:OSInfo.OSVersion)..." -ForegroundColor Cyan
         Write-Host "[INFO] Defender features may vary by OS version" -ForegroundColor DarkGray
+        
+        $operationSuccess = @{}
+        $allOperationsSucceeded = $true
         
         # Start Defender Service
         Write-Host "[ACTION] Starting Windows Defender service..." -ForegroundColor White
@@ -1309,15 +1434,20 @@ function Enable-Windows-Defender {
             if (-not $defenderService) {
                 Write-Host "  [WARNING] Windows Defender service (WinDefend) not found on this OS version" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Windows Defender service not found on $($script:OSInfo.OSVersion)"
+                $operationSuccess["ServiceStart"] = $false
+                $allOperationsSucceeded = $false
             } else {
                 Start-Service -Name WinDefend -ErrorAction Stop
                 Set-Service -Name WinDefend -StartupType Automatic -ErrorAction Stop
                 Write-Host "  [SUCCESS] Windows Defender service started and set to automatic" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Windows Defender service started and set to automatic"
+                $operationSuccess["ServiceStart"] = $true
             }
         } catch {
             Write-Host "  [WARNING] Could not start Windows Defender service: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "Could not start Windows Defender service: $($_.Exception.Message)" -Console
+            $operationSuccess["ServiceStart"] = $false
+            $allOperationsSucceeded = $false
         }
         
         # Set Defender Policies
@@ -1365,9 +1495,15 @@ function Enable-Windows-Defender {
             }
         }
         
+        $registrySuccess = $true
         foreach ($path in $defenderSettings.Keys) {
             if (-not (Test-Path $path)) {
-                New-Item -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
+                try {
+                    New-Item -Path $path -Force -ErrorAction Stop | Out-Null
+                } catch {
+                    Write-Log -Level "WARNING" -Message "Could not create registry path $path : $($_.Exception.Message)"
+                    $registrySuccess = $false
+                }
             }
             foreach ($name in $defenderSettings[$path].Keys) {
                 try {
@@ -1375,8 +1511,13 @@ function Enable-Windows-Defender {
                     Write-Verbose "Set Defender registry: $path\$name = $($defenderSettings[$path][$name])"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not set Defender registry $path\$name : $($_.Exception.Message)"
+                    $registrySuccess = $false
                 }
             }
+        }
+        $operationSuccess["RegistrySettings"] = $registrySuccess
+        if (-not $registrySuccess) {
+            $allOperationsSucceeded = $false
         }
         
         # Enable Tamper Protection (Windows 10/11 and Server 2019/2022)
@@ -1385,14 +1526,17 @@ function Enable-Windows-Defender {
             Write-Host "[ACTION] Enabling Tamper Protection (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
             try {
                 if (-not (Test-Path $defenderFeaturesPath)) {
-                    New-Item -Path $defenderFeaturesPath -Force -ErrorAction SilentlyContinue | Out-Null
+                    New-Item -Path $defenderFeaturesPath -Force -ErrorAction Stop | Out-Null
                 }
                 New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
                 Write-Host "  [SUCCESS] Tamper Protection enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled Tamper Protection"
+                $operationSuccess["TamperProtection"] = $true
             } catch {
                 Write-Host "  [WARNING] Could not enable Tamper Protection: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Could not enable Tamper Protection: $($_.Exception.Message)"
+                $operationSuccess["TamperProtection"] = $false
+                $allOperationsSucceeded = $false
             }
         } else {
             Write-Host "[INFO] Tamper Protection not available on $($script:OSInfo.OSVersion) (requires Windows 10/11 or Server 2019/2022)" -ForegroundColor DarkGray
@@ -1403,6 +1547,7 @@ function Enable-Windows-Defender {
         # OS-specific: ASR rules are only available on Windows 10/11 and Server 2019/2022
         if ($script:OSInfo.OSFamily -in "Client10", "Client11", "Server2019", "Server2022") {
             Write-Host "[ACTION] Enabling Attack Surface Reduction (ASR) rules (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
+            $asrSuccess = $true
             try {
                 $asrRules = @(
                     "75668C1F-73B5-4CF0-BB93-3ECF5CB7CC84",
@@ -1422,18 +1567,30 @@ function Enable-Windows-Defender {
                     "E6DB77E5-3DF2-4CF1-B95A-636979351E5B"
                 )
                 
+                $asrEnabledCount = 0
                 foreach ($ruleId in $asrRules) {
                     try {
                         Add-MpPreference -AttackSurfaceReductionRules_Ids $ruleId -AttackSurfaceReductionRules_Actions Enabled -ErrorAction Stop | Out-Null
+                        $asrEnabledCount++
                     } catch {
                         Write-Verbose "Could not enable ASR rule $ruleId (may already be enabled or not supported)"
                     }
                 }
-                Write-Host "  [SUCCESS] Attack Surface Reduction rules enabled" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Enabled Attack Surface Reduction rules"
+                if ($asrEnabledCount -gt 0) {
+                    Write-Host "  [SUCCESS] Enabled $asrEnabledCount Attack Surface Reduction rule(s)" -ForegroundColor Green
+                    Write-Log -Level "SUCCESS" -Message "Enabled $asrEnabledCount Attack Surface Reduction rule(s)"
+                } else {
+                    Write-Host "  [WARNING] Could not enable any ASR rules" -ForegroundColor Yellow
+                    $asrSuccess = $false
+                }
             } catch {
                 Write-Host "  [WARNING] Could not enable all ASR rules: $($_.Exception.Message)" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Could not enable all ASR rules: $($_.Exception.Message)"
+                $asrSuccess = $false
+            }
+            $operationSuccess["ASRRules"] = $asrSuccess
+            if (-not $asrSuccess) {
+                $allOperationsSucceeded = $false
             }
         } else {
             Write-Host "[INFO] Attack Surface Reduction rules not available on $($script:OSInfo.OSVersion) (requires Windows 10/11 or Server 2019/2022)" -ForegroundColor DarkGray
@@ -1473,9 +1630,78 @@ function Enable-Windows-Defender {
             }
         } catch {
             Write-Log -Level "WARNING" -Message "Could not remove Defender exclusions: $($_.Exception.Message)"
+            $operationSuccess["RemoveExclusions"] = $false
+            $allOperationsSucceeded = $false
         }
         
+        # Enable Defender using PowerShell cmdlets (primary method)
+        Write-Host "[ACTION] Enabling Windows Defender real-time monitoring and protection features..." -ForegroundColor White
+        try {
+            # Enable Real-time Monitoring
+            Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction Stop
+            $operationSuccess["RealTimeMonitoring"] = $true
+            
+            # Enable other protection features
+            Set-MpPreference -DisableBehaviorMonitoring $false -ErrorAction Stop
+            Set-MpPreference -DisableBlockAtFirstSeen $false -ErrorAction Stop
+            Set-MpPreference -DisableIOAVProtection $false -ErrorAction Stop
+            Set-MpPreference -DisableScriptScanning $false -ErrorAction Stop
+            $operationSuccess["ProtectionFeatures"] = $true
+            
+            Write-Host "  [SUCCESS] Windows Defender protection features enabled via PowerShell cmdlets" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Enabled Windows Defender protection features via Set-MpPreference"
+        } catch {
+            Write-Host "  [WARNING] Could not enable Defender via PowerShell cmdlets: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Could not enable Defender via PowerShell cmdlets: $($_.Exception.Message)"
+            $operationSuccess["ProtectionFeatures"] = $false
+            $allOperationsSucceeded = $false
+        }
+        
+        # Verify Defender is enabled
+        try {
+            $defenderStatus = Get-MpPreference -ErrorAction Stop
+            if ($defenderStatus.DisableRealtimeMonitoring -eq $false) {
+                $script:DefenderStatus = "Enabled"
+                Write-Host "  [SUCCESS] Verified: Windows Defender is enabled" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Verified Windows Defender is enabled"
+            } else {
+                $script:DefenderStatus = "Disabled"
+                Write-Host "  [WARNING] Windows Defender real-time monitoring appears to be disabled" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "Windows Defender real-time monitoring appears disabled"
+                $allOperationsSucceeded = $false
+            }
+        } catch {
+            Write-Host "  [WARNING] Could not verify Defender status: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Could not verify Defender status: $($_.Exception.Message)"
+            $script:DefenderStatus = "Unknown"
+            $allOperationsSucceeded = $false
+        }
+        
+        # Verify service is running
+        try {
+            $serviceStatus = Get-Service WinDefend -ErrorAction Stop
+            if ($serviceStatus.Status -eq "Running") {
+                Write-Host "  [SUCCESS] Windows Defender service is running" -ForegroundColor Green
+                $operationSuccess["ServiceRunning"] = $true
+            } else {
+                Write-Host "  [WARNING] Windows Defender service is not running (Status: $($serviceStatus.Status))" -ForegroundColor Yellow
+                $operationSuccess["ServiceRunning"] = $false
+                $allOperationsSucceeded = $false
+            }
+        } catch {
+            Write-Host "  [WARNING] Could not check Defender service status: $($_.Exception.Message)" -ForegroundColor Yellow
+            $operationSuccess["ServiceRunning"] = $false
+            $allOperationsSucceeded = $false
+        }
+        
+        # Report final status
+        if ($allOperationsSucceeded) {
         Write-Host "Windows Defender enabled and configured successfully" -ForegroundColor Green
+        } else {
+            $failedOps = $operationSuccess.GetEnumerator() | Where-Object { $_.Value -eq $false } | ForEach-Object { $_.Key }
+            Write-Host "Windows Defender configuration completed with errors. Failed operations: $($failedOps -join ', ')" -ForegroundColor Yellow
+            throw "Windows Defender configuration completed with errors: $($failedOps -join ', ')"
+        }
     }
 }
 
@@ -1490,6 +1716,16 @@ function Quick-Harden {
     Invoke-HardeningOperation -OperationName "Quick Harden" -ScriptBlock {
         Write-Host "`n=== QUICK HARDENING STARTED ===" -ForegroundColor Green
         Write-Host "This will perform essential hardening steps automatically..." -ForegroundColor Yellow
+        
+        # Step 0: Initialize Context (A command)
+        Write-Host "`n0. Initializing context..." -ForegroundColor Cyan
+        try {
+            Initialize-Context
+            Write-Host "Context initialized successfully" -ForegroundColor Green
+        } catch {
+            Write-Host "Context initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+            throw "Context initialization failed: $($_.Exception.Message)"
+        }
         
         # Step 1: Disable all users except current one
         Write-Host "`n1. Disabling all users except current user..." -ForegroundColor Cyan
@@ -1522,9 +1758,26 @@ function Quick-Harden {
         Write-Host "`n6. Enabling Windows Defender..." -ForegroundColor Cyan
         Enable-Windows-Defender
         
-        # Step 7: Configure Firewall (with common ports)
-        Write-Host "`n7. Configuring firewall with common ports..." -ForegroundColor Cyan
-        $commonPorts = @(53, 3389, 80, 22, 443)
+        # Step 7: Configure Firewall (interactive port selection)
+        Write-Host "`n7. Configuring firewall..." -ForegroundColor Cyan
+        Write-Host "Common ports: 22 (SSH), 80 (HTTP), 443 (HTTPS), 3389 (RDP), 5985/5986 (WinRM)" -ForegroundColor Yellow
+        $portsInput = Read-Host "Enter ports to keep open (comma-separated, e.g., 80,443,3389)"
+        $portArray = $portsInput -split ',' | ForEach-Object { 
+            $port = $_.Trim()
+            # Validate port number (1-65535)
+            if ($port -match '^\d+$' -and [int]$port -ge 1 -and [int]$port -le 65535) {
+                [int]$port
+            } else {
+                Write-Host "  [WARNING] Invalid port number: $port (skipping)" -ForegroundColor Yellow
+                $null
+            }
+        } | Where-Object { $_ -ne $null }
+        
+        if ($portArray.Count -eq 0) {
+            Write-Host "  [WARNING] No valid ports provided, using default ports: 22, 80, 443, 3389" -ForegroundColor Yellow
+            $portArray = @(22, 80, 443, 3389)
+        }
+        
         try {
             # Disable firewall temporarily
             netsh advfirewall set allprofiles state off | Out-Null
@@ -1533,14 +1786,17 @@ function Quick-Harden {
             netsh advfirewall firewall set rule all dir=in new enable=no | Out-Null
             netsh advfirewall firewall set rule all dir=out new enable=no | Out-Null
             
-            # Add common port rules
-            foreach ($port in $commonPorts) {
+            # Add port rules
+            foreach ($port in $portArray) {
                 $description = switch ($port) {
-                    53 { "DNS" }
-                    3389 { "RDP" }
-                    80 { "HTTP" }
                     22 { "SSH" }
+                    53 { "DNS" }
+                    80 { "HTTP" }
                     443 { "HTTPS" }
+                    3389 { "RDP" }
+                    5985 { "WinRM-HTTP" }
+                    5986 { "WinRM-HTTPS" }
+                    default { "Port-$port" }
                 }
                 
                 # Inbound rules
@@ -1554,8 +1810,8 @@ function Quick-Harden {
             
             # Re-enable firewall
             netsh advfirewall set allprofiles state on | Out-Null
-            Write-Host "Firewall configured with common ports: $($commonPorts -join ', ')" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Quick harden firewall configured"
+            Write-Host "Firewall configured with ports: $($portArray -join ', ')" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Quick harden firewall configured with ports: $($portArray -join ', ')"
         } catch {
             Write-Host "Firewall configuration failed: $($_.Exception.Message)" -ForegroundColor Red
             Write-Log -Level "ERROR" -Message "Quick harden firewall configuration failed: $($_.Exception.Message)"
@@ -1565,10 +1821,55 @@ function Quick-Harden {
         Write-Host "`n8. Disabling unnecessary services..." -ForegroundColor Cyan
         Disable-Unnecessary-Services
         
-        # Step 9: Run Windows Updates
-        Write-Host "`n9. Running Windows Updates..." -ForegroundColor Cyan
-        Write-Host "This may take a while..." -ForegroundColor Yellow
-        Run-Windows-Updates
+        # Step 9: Disable users (except competition users)
+        Write-Host "`n9. Disabling users (except competition users)..." -ForegroundColor Cyan
+        try {
+            # Read competition users from users.txt
+            if (Test-Path ".\users.txt") {
+                Start-Sleep -Milliseconds 500  # Ensure file is fully written
+                $competitionUsers = Get-Content ".\users.txt" -ErrorAction Stop
+                if ($competitionUsers.Count -eq 0) {
+                    Write-Host "  [WARNING] users.txt is empty, skipping user disabling" -ForegroundColor Yellow
+                } else {
+                    # Get all LOCAL users (not AD users)
+                    $localUsers = Get-LocalUser | Where-Object { $_.Enabled -eq $true }
+                    
+                    # Disable all local users NOT in competition users list
+                    $disabledCount = 0
+                    foreach ($user in $localUsers) {
+                        if ($user.Name -notin $competitionUsers) {
+                            try {
+                                Disable-LocalUser -Name $user.Name -ErrorAction Stop
+                                Write-Host "  [SUCCESS] Disabled user: $($user.Name)" -ForegroundColor Green
+                                Write-Log -Level "SUCCESS" -Message "Disabled user: $($user.Name)"
+                                $disabledCount++
+                            } catch {
+                                Write-Host "  [FAILED] Could not disable user: $($user.Name) - $($_.Exception.Message)" -ForegroundColor Red
+                                Write-Log -Level "WARNING" -Message "Could not disable user: $($user.Name) - $($_.Exception.Message)"
+                            }
+                        }
+                    }
+                    Write-Host "Disabled $disabledCount user(s)" -ForegroundColor Green
+                }
+            } else {
+                Write-Host "  [WARNING] users.txt not found, skipping user disabling" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  [WARNING] Error during user disabling: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Error during user disabling: $($_.Exception.Message)"
+        }
+        
+        # Step 10: Set Execution Policy
+        Write-Host "`n10. Setting Execution Policy to RemoteSigned..." -ForegroundColor Cyan
+        try {
+            Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction Stop
+            Write-Host "Execution Policy set to RemoteSigned successfully" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Set Execution Policy to RemoteSigned"
+        } catch {
+            Write-Host "Failed to set Execution Policy: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "Failed to set Execution Policy: $($_.Exception.Message)"
+            throw "Failed to set Execution Policy: $($_.Exception.Message)"
+        }
         
         Write-Host "`n=== QUICK HARDENING COMPLETED ===" -ForegroundColor Green
         Write-Host "Essential hardening steps have been completed successfully!" -ForegroundColor Green
@@ -1626,7 +1927,10 @@ function Install-EternalBluePatch {
     # EternalBlue patch is only for older OS versions
     $eternalBlueCompatible = @("Client7", "Client8", "Server2008", "Server2008R2", "Server2012", "Server2012R2")
     
-    Invoke-HardeningOperation -OperationName "Install EternalBlue Patch" -OSCompatibility $eternalBlueCompatible -ScriptBlock {
+    # Track status for executive report
+    $script:EternalBlueStatus = "Unknown"
+    
+    Invoke-HardeningOperation -OperationName "EternalBlue Mitigated" -OSCompatibility $eternalBlueCompatible -ScriptBlock {
         if (-not (Test-Path "patchURLs.json")) {
             Write-Host "patchURLs.json not found. Please run Initialize Context first." -ForegroundColor Yellow
             Write-Log -Level "WARNING" -Message "patchURLs.json not found"
@@ -1670,8 +1974,10 @@ function Install-EternalBluePatch {
                 throw "Patch installation returned exit code: $($process.ExitCode)"
             }
             Write-Log -Level "SUCCESS" -Message "EternalBlue patch installed successfully"
+            $script:EternalBlueStatus = "Mitigated"
         } catch {
             Write-Log -Level "ERROR" -Message "Failed to install EternalBlue patch: $($_.Exception.Message)"
+            $script:EternalBlueStatus = "Failed - $($_.Exception.Message)"
             throw
         } finally {
             # Cleanup
@@ -1870,19 +2176,20 @@ function Run-Windows-Updates {
         
         # Check for updates using COM object
         Write-Host "[STEP 3/4] Searching for available updates..." -ForegroundColor Cyan
+        $script:WindowsUpdateStatus = "Unknown"
         try {
             Write-Host "  [INFO] Connecting to Windows Update service..." -ForegroundColor White
-            $wuSession = New-Object -ComObject Microsoft.Update.Session
-            $wuSearcher = $wuSession.CreateUpdateSearcher()
+            $wuSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
+            $wuSearcher = $wuSession.CreateUpdateSearcher() -ErrorAction Stop
             
             Write-Host "  [INFO] Searching for updates (this may take several minutes)..." -ForegroundColor White
-            $updates = $wuSearcher.Search("IsInstalled=0")
+            $searchResult = $wuSearcher.Search("IsInstalled=0 and Type='Software'") -ErrorAction Stop
             
-            if ($updates.Updates.Count -gt 0) {
-                Write-Host "  [SUCCESS] Found $($updates.Updates.Count) update(s) to install" -ForegroundColor Green
-                Write-Log -Level "INFO" -Message "Found $($updates.Updates.Count) update(s) to install" -Console
+            if ($searchResult.Updates.Count -gt 0) {
+                Write-Host "  [SUCCESS] Found $($searchResult.Updates.Count) update(s) to install" -ForegroundColor Green
+                Write-Log -Level "INFO" -Message "Found $($searchResult.Updates.Count) update(s) to install" -Console
                 
-                $totalUpdates = $updates.Updates.Count
+                $totalUpdates = $searchResult.Updates.Count
                 $updateCounter = 0
                 $successfulUpdates = 0
                 $failedUpdates = 0
@@ -1893,35 +2200,69 @@ function Run-Windows-Updates {
                 # Initialize progress bar
                 Write-Progress -Activity "Installing Windows Updates" -Status "0% Complete" -PercentComplete 0
                 
-                $updates.Updates | ForEach-Object {
+                # Create update collection for downloads
+                $updatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
+                
+                # Add updates that need to be downloaded
+                foreach ($update in $searchResult.Updates) {
+                    if ($update.IsDownloaded -eq $false) {
+                        try {
+                            $updatesToDownload.Add($update) | Out-Null
+                        } catch {
+                            Write-Host "    [WARNING] Could not add update to download collection: $($update.Title)" -ForegroundColor Yellow
+                            Write-Log -Level "WARNING" -Message "Could not add update to download collection: $($update.Title)"
+                        }
+                    }
+                }
+                
+                # Download updates if needed
+                if ($updatesToDownload.Count -gt 0) {
+                    Write-Host "  [INFO] Downloading $($updatesToDownload.Count) update(s)..." -ForegroundColor White
+                    try {
+                        $downloader = $wuSession.CreateUpdateDownloader()
+                        $downloader.Updates = $updatesToDownload
+                        $downloadResult = $downloader.Download()
+                        
+                        if ($downloadResult.ResultCode -eq 2) {
+                            Write-Host "  [SUCCESS] Updates downloaded successfully" -ForegroundColor Green
+                        } else {
+                            Write-Host "  [WARNING] Download returned code: $($downloadResult.ResultCode)" -ForegroundColor Yellow
+                        }
+                    } catch {
+                        Write-Host "  [WARNING] Download failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                }
+                
+                # Install updates
+                foreach ($update in $searchResult.Updates) {
                     $updateCounter++
                     $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
-                    Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($_.Title)" -PercentComplete $percentComplete
-                    
-                    #Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates:$($_.Title)" -ForegroundColor Cyan
+                    Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($update.Title)" -PercentComplete $percentComplete
                     
                     # Install update
                     try {
-                        $installer = $wuSession.CreateUpdateInstaller()
-                        $installer.AddUpdate($_) | Out-Null
-                        $installResult = $installer.Install()
+                        $installer = $wuSession.CreateUpdateInstaller() -ErrorAction Stop
+                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
+                        $updatesToInstall.Add($update) | Out-Null
+                        $installer.Updates = $updatesToInstall
+                        $installResult = $installer.Install() -ErrorAction Stop
                         
                         if ($installResult.ResultCode -eq 2) {
                             Write-Host "    [SUCCESS] Update installed successfully" -ForegroundColor Green
-                            Write-Log -Level "SUCCESS" -Message "Installed update: $($_.Title)"
+                            Write-Log -Level "SUCCESS" -Message "Installed update: $($update.Title)"
                             $successfulUpdates++
                         } elseif ($installResult.ResultCode -eq 3010) {
                             Write-Host "    [SUCCESS] Update installed (restart required)" -ForegroundColor Green
-                            Write-Log -Level "SUCCESS" -Message "Installed update (restart required): $($_.Title)"
+                            Write-Log -Level "SUCCESS" -Message "Installed update (restart required): $($update.Title)"
                             $successfulUpdates++
                         } else {
-                            Write-Host "    [WARNING] Update installation returned code $($installResult.ResultCode): $($_.Title)" -ForegroundColor Yellow
-                            Write-Log -Level "WARNING" -Message "Update installation returned code $($installResult.ResultCode): $($_.Title)"
+                            Write-Host "    [WARNING] Update installation returned code $($installResult.ResultCode): $($update.Title)" -ForegroundColor Yellow
+                            Write-Log -Level "WARNING" -Message "Update installation returned code $($installResult.ResultCode): $($update.Title)"
                             $failedUpdates++
                         }
                     } catch {
                         Write-Host "    [ERROR] Failed to install update: $($_.Exception.Message)" -ForegroundColor Red
-                        Write-Log -Level "ERROR" -Message "Failed to install update $($_.Title): $($_.Exception.Message)"
+                        Write-Log -Level "ERROR" -Message "Failed to install update $($update.Title): $($_.Exception.Message)"
                         $failedUpdates++
                     }
                 }
@@ -1930,13 +2271,23 @@ function Run-Windows-Updates {
                 Write-Host "  [INFO] Update installation summary:" -ForegroundColor Cyan
                 Write-Host "    Successful: $successfulUpdates" -ForegroundColor Green
                 Write-Host "    Failed: $failedUpdates" -ForegroundColor $(if ($failedUpdates -eq 0) { "Green" } else { "Red" })
+                
+                if ($failedUpdates -eq 0) {
+                    $script:WindowsUpdateStatus = "Completed"
                 Write-Host "[SUCCESS] Windows Updates installation process completed." -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Windows Updates completed: $successfulUpdates succeeded, $failedUpdates failed" -Console
             } else {
+                    $script:WindowsUpdateStatus = "Completed with errors"
+                    Write-Host "[WARNING] Windows Updates completed with $failedUpdates failure(s)." -ForegroundColor Yellow
+                    Write-Log -Level "WARNING" -Message "Windows Updates completed with errors: $successfulUpdates succeeded, $failedUpdates failed" -Console
+                }
+            } else {
+                $script:WindowsUpdateStatus = "Completed - No updates available"
                 Write-Host "  [INFO] No updates available - system is up to date" -ForegroundColor Green
                 Write-Log -Level "INFO" -Message "No updates available" -Console
             }
         } catch {
+            $script:WindowsUpdateStatus = "Failed - $($_.Exception.Message)"
             Write-Host "  [ERROR] Windows Update search/installation failed: $($_.Exception.Message)" -ForegroundColor Red
             Write-Log -Level "ERROR" -Message "Windows Update search/installation failed: $($_.Exception.Message)" -Console
             Write-Host "[WARNING] Windows Update process encountered an error. You may need to run Windows Update manually." -ForegroundColor Yellow
