@@ -1898,7 +1898,7 @@ function Run-Windows-Updates {
                     $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
                     Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($_.Title)" -PercentComplete $percentComplete
                     
-                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates:$($_.Title)" -ForegroundColor Cyan
+                    #Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates:$($_.Title)" -ForegroundColor Cyan
                     
                     # Install update
                     try {
