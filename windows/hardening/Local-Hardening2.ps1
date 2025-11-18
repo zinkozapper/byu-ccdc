@@ -1381,12 +1381,13 @@ function Disable-Unnecessary-Services {
     
     Invoke-HardeningOperation -OperationName "Disable Unnecessary Services" -ScriptBlock {
         # Get all active network adapters
-        $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }        
+        $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+        
         if ($activeAdapters) {
             # Loop through each active adapter and disable IPv6
             foreach ($adapter in $activeAdapters) {
                 try {
-                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6                    
+                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6
                     Write-Log -Level "SUCCESS" -Message "Disabled IPv6 on adapter: $($adapter.Name)"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not disable IPv6 on adapter $($adapter.Name): $($_.Exception.Message)"
@@ -1396,7 +1397,9 @@ function Disable-Unnecessary-Services {
         
         # Get all IP-enabled adapters and disable NetBIOS over TCP/IP
         try {
-            $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"            foreach ($adapter in $adapters) {
+            $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"
+            
+            foreach ($adapter in $adapters) {
                 try {
                     # Disable NetBIOS over TCP/IP (NetbiosOptions = 2)
                     $adapter.SetTcpipNetbios(2) | Out-Null
