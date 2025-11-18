@@ -976,7 +976,7 @@ function Get-Set-Password {
                 return $true
             } catch {
                 Write-Host "[FAILED] Could not update password for $user - $($_.Exception.Message)" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Failed to update password for $user: $($_.Exception.Message)"
+                Write-Log -Level "ERROR" -Message "Failed to update password for $($user): $($_.Exception.Message)"
                 
                 # Clear the plaintext passwords from memory
                 $pwPlainText = $null
@@ -999,9 +999,9 @@ function Get-Set-Password {
             return $false
         }
     } catch {
-        Write-Host "[FAILED] Error with password submission for $user: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[FAILED] Error with password submission for $($user): $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "Please try again...`n" -ForegroundColor Yellow
-        Write-Log -Level "ERROR" -Message "Error in Get-Set-Password for $user: $($_.Exception.Message)"
+        Write-Log -Level "ERROR" -Message "Error in Get-Set-Password for $($user): $($_.Exception.Message)"
         return $false
     }
 }
@@ -1386,7 +1386,8 @@ function Disable-Unnecessary-Services {
             # Loop through each active adapter and disable IPv6
             foreach ($adapter in $activeAdapters) {
                 try {
-                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6                    Write-Log -Level "SUCCESS" -Message "Disabled IPv6 on adapter: $($adapter.Name)"
+                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6                    
+                    Write-Log -Level "SUCCESS" -Message "Disabled IPv6 on adapter: $($adapter.Name)"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not disable IPv6 on adapter $($adapter.Name): $($_.Exception.Message)"
                 }
