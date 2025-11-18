@@ -106,10 +106,10 @@ function Get-OperatingSystemInfo {
         
         # Use CIM for better compatibility, fallback to WMI if needed
         try {
-            $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+            $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
         } catch {
             Write-Warning "CIM query failed, falling back to WMI..."
-            $osInfo = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
+            $osInfo = Get-WmiObject -Class Win32_OperatingSystem
         }
         
         $caption = $osInfo.Caption
@@ -129,8 +129,7 @@ function Get-OperatingSystemInfo {
         $isServerCore = $false
         if ($productType -in 2, 3) {
             try {
-                $serverFeatures = Get-WindowsFeature -ErrorAction SilentlyContinue
-                if ($serverFeatures) {
+                $serverFeatures = Get-WindowsFeature                if ($serverFeatures) {
                     $guiFeature = $serverFeatures | Where-Object { $_.Name -eq "Server-Gui-Mgmt-Infra" -or $_.Name -eq "Server-Gui-Shell" }
                     $isServerCore = ($guiFeature -and $guiFeature.InstallState -ne "Installed")
                 }
@@ -223,7 +222,7 @@ function Initialize-Logging {
     try {
         # Create log directory if it doesn't exist
         if (-not (Test-Path $LogPath)) {
-            New-Item -Path $LogPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            New-Item -Path $LogPath -ItemType Directory -Force | Out-Null
             Write-Verbose "Created log directory: $LogPath"
         }
         
@@ -562,8 +561,7 @@ function Test-Prerequisite {
                 }
             }
             "Service" {
-                $service = Get-Service -Name $Value -ErrorAction SilentlyContinue
-                if (-not $service) {
+                $service = Get-Service -Name $Value                if (-not $service) {
                     Write-Host "[WARNING] Service not found for $OperationName : $Value" -ForegroundColor Yellow
                     Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : Service not found: $Value" -Console
                     return $false
@@ -619,7 +617,7 @@ function Set-RegistryValue {
         if (-not (Test-Path $Path)) {
             if ($CreatePathIfMissing) {
                 Write-Host "[INFO] Creating registry path: $Path" -ForegroundColor Cyan
-                New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+                New-Item -Path $Path -Force | Out-Null
                 Write-Log -Level "SUCCESS" -Message "Created registry path: $Path"
             } else {
                 $message = "Registry path not found and CreatePathIfMissing not specified: $Path"
@@ -631,16 +629,15 @@ function Set-RegistryValue {
         }
         
         # Check if property already exists
-        $existingValue = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
-        
+        $existingValue = Get-ItemProperty -Path $Path -Name $Name        
         if ($existingValue) {
             # Update existing value
-            Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $PropertyType -ErrorAction Stop | Out-Null
+            Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $PropertyType | Out-Null
             Write-Host "[SUCCESS] Updated registry value: $Path\$Name = $Value" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Updated registry value: $Path\$Name = $Value"
         } else {
             # Create new value
-            New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force -ErrorAction Stop | Out-Null
+            New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force | Out-Null
             Write-Host "[SUCCESS] Created registry value: $Path\$Name = $Value" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Created registry value: $Path\$Name = $Value"
         }
@@ -753,8 +750,7 @@ function Initialize-Context {
             if (-not (Test-Path "$pwd\$filename")) {
                 Write-Host "Downloading $filename..." -ForegroundColor Cyan
                 try {
-                    Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$file" -OutFile "$pwd\$filename" -ErrorAction Stop
-                    Write-Log -Level "SUCCESS" -Message "Downloaded $filename"
+                    Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$file" -OutFile "$pwd\$filename"                    Write-Log -Level "SUCCESS" -Message "Downloaded $filename"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Failed to download $filename : $($_.Exception.Message)"
                     throw "Failed to download required file: $filename"
@@ -824,8 +820,7 @@ function GetCompetitionUsers {
         $content = "$user1`n$user2"
         
         # Write the usernames to users.txt in the current directory
-        Set-Content -Path ".\users.txt" -Value $content -ErrorAction Stop
-        
+        Set-Content -Path ".\users.txt" -Value $content        
         # Wait a moment to ensure file system has updated
         Start-Sleep -Milliseconds 500
         
@@ -834,8 +829,7 @@ function GetCompetitionUsers {
             throw "users.txt was not created successfully"
         }
         
-        $verifyContent = Get-Content ".\users.txt" -ErrorAction Stop
-        if ($verifyContent.Count -eq 0) {
+        $verifyContent = Get-Content ".\users.txt"        if ($verifyContent.Count -eq 0) {
             throw "users.txt is empty after creation"
         }
         
@@ -889,8 +883,7 @@ function Disable-AllUsers {
         if (Test-Path ".\users.txt") {
             try {
                 Start-Sleep -Milliseconds 500  # Ensure file is fully written
-                $competitionUsers = Get-Content ".\users.txt" -ErrorAction Stop
-            } catch {
+                $competitionUsers = Get-Content ".\users.txt"            } catch {
                 Write-Log -Level "WARNING" -Message "Could not read users.txt for competition users: $($_.Exception.Message)"
             }
         }
@@ -910,8 +903,7 @@ function Disable-AllUsers {
         }
         
         foreach ($user in $usersToDisable) {
-            Disable-LocalUser -Name $user.Name -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Disabled user: $($user.Name)"
+            Disable-LocalUser -Name $user.Name            Write-Log -Level "SUCCESS" -Message "Disabled user: $($user.Name)"
         }
         
         Write-Host "Disabled $($usersToDisable.Count) user(s)" -ForegroundColor Green
@@ -955,8 +947,7 @@ function Get-Set-Password {
     
     try {
         # Verify user exists first
-        $localUser = Get-LocalUser -Name $user -ErrorAction Stop
-        
+        $localUser = Get-LocalUser -Name $user        
         $pw = Read-Host -AsSecureString -Prompt "New password for '$user'?"
         $conf = Read-Host -AsSecureString -Prompt "Confirm password"
         
@@ -968,12 +959,10 @@ function Get-Set-Password {
             # Attempt to set the password
             try {
                 $securePassword = ConvertTo-SecureString -AsPlainText $pwPlainText -Force
-                $localUser | Set-LocalUser -Password $securePassword -ErrorAction Stop
-                
+                $localUser | Set-LocalUser -Password $securePassword                
                 # Verify the password was actually changed by attempting to read user again
                 # (This is a basic verification - the Set-LocalUser should throw if it fails)
-                $verifyUser = Get-LocalUser -Name $user -ErrorAction Stop
-                
+                $verifyUser = Get-LocalUser -Name $user                
                 Write-Host "[SUCCESS] Password updated for user: $user" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Password updated for user: $user"
                 
@@ -985,35 +974,6 @@ function Get-Set-Password {
                 $pw.Dispose()
                 $conf.Dispose()
                 return $true
-            } catch [Microsoft.PowerShell.Commands.PasswordException] {
-                Write-Host "[FAILED] Password for $user does not meet complexity requirements" -ForegroundColor Red
-                Write-Host "Password must meet the following requirements:" -ForegroundColor Yellow
-                Write-Host "  - At least 8 characters long" -ForegroundColor Yellow
-                Write-Host "  - Contains uppercase letters (A-Z)" -ForegroundColor Yellow
-                Write-Host "  - Contains lowercase letters (a-z)" -ForegroundColor Yellow
-                Write-Host "  - Contains numbers (0-9)" -ForegroundColor Yellow
-                Write-Host "  - Contains special characters (!@#$%^&*...)" -ForegroundColor Yellow
-                Write-Host "Error details: $($_.Exception.Message)" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Password for $user failed complexity requirements: $($_.Exception.Message)"
-                
-                # Clear the plaintext passwords from memory
-                $pwPlainText = $null
-                $confPlainText = $null
-                [System.GC]::Collect()
-                $pw.Dispose()
-                $conf.Dispose()
-                return $false
-            } catch [Microsoft.PowerShell.Commands.UserNotFoundException] {
-                Write-Host "[FAILED] User $user not found" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User $user not found when setting password"
-                
-                # Clear the plaintext passwords from memory
-                $pwPlainText = $null
-                $confPlainText = $null
-                [System.GC]::Collect()
-                $pw.Dispose()
-                $conf.Dispose()
-                return $false
             } catch {
                 Write-Host "[FAILED] Could not update password for $user - $($_.Exception.Message)" -ForegroundColor Red
                 Write-Log -Level "ERROR" -Message "Failed to update password for $user: $($_.Exception.Message)"
@@ -1038,10 +998,6 @@ function Get-Set-Password {
             $conf.Dispose()
             return $false
         }
-    } catch [Microsoft.PowerShell.Commands.UserNotFoundException] {
-        Write-Host "[FAILED] User $user not found" -ForegroundColor Red
-        Write-Log -Level "ERROR" -Message "User $user not found"
-        return $false
     } catch {
         Write-Host "[FAILED] Error with password submission for $user: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "Please try again...`n" -ForegroundColor Yellow
@@ -1071,8 +1027,7 @@ function Add-Competition-Users {
         
         # Read users from file with error handling
         try {
-            $users = Get-Content ".\users.txt" -ErrorAction Stop
-            if ($users.Count -eq 0) {
+            $users = Get-Content ".\users.txt"            if ($users.Count -eq 0) {
                 Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "users.txt is empty"
                 throw "users.txt is empty"
@@ -1095,8 +1050,7 @@ function Add-Competition-Users {
             if ($user -eq "") { continue }
             
             # Check if user already exists
-            $existingUser = Get-LocalUser -Name $user -ErrorAction SilentlyContinue
-            if ($existingUser) {
+            $existingUser = Get-LocalUser -Name $user            if ($existingUser) {
                 Write-Host "User '$user' already exists, skipping creation" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "User '$user' already exists"
                 continue
@@ -1106,15 +1060,12 @@ function Add-Competition-Users {
                 Name = $user
                 Password = (ConvertTo-SecureString -String (GeneratePassword) -AsPlainText -Force)
             }
-            New-LocalUser @splat -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Created user: $user"
+            New-LocalUser @splat            Write-Log -Level "SUCCESS" -Message "Created user: $user"
             
             $userIndex = [array]::IndexOf($script:UserArray, $user)
             
             if ($userIndex -eq 0) {
-                Add-LocalGroupMember -Group "Administrators" -Member $user -ErrorAction Stop
-                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Added $user to Administrators and Remote Desktop Users groups"
+                Add-LocalGroupMember -Group "Administrators" -Member $user                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user                Write-Log -Level "SUCCESS" -Message "Added $user to Administrators and Remote Desktop Users groups"
                 
                 while ($true) {
                     if (Get-Set-Password -user $user) { break }
@@ -1122,8 +1073,7 @@ function Add-Competition-Users {
             }
             
             if ($userIndex -eq 1) {
-                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Added $user to Remote Desktop Users group"
+                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user                Write-Log -Level "SUCCESS" -Message "Added $user to Remote Desktop Users group"
                 
                 while ($true) {
                     if (Get-Set-Password -user $user) { break }
@@ -1137,8 +1087,7 @@ function Add-Competition-Users {
         if ($confirmation.ToLower() -eq "y") {
             $enableUsers = Get-Comma-Separated-List -category "users"
             $enableUsers | ForEach-Object {
-                Enable-LocalUser -Name $_ -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Enabled user: $_"
+                Enable-LocalUser -Name $_                Write-Log -Level "SUCCESS" -Message "Enabled user: $_"
                 $userInfos = Print-Users
             }
         }
@@ -1147,8 +1096,7 @@ function Add-Competition-Users {
         if ($confirmation.ToLower() -eq "y") {
             $disableUsers = Get-Comma-Separated-List -category "users"
             $disableUsers | ForEach-Object {
-                Disable-LocalUser -Name $_ -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Disabled user: $_"
+                Disable-LocalUser -Name $_                Write-Log -Level "SUCCESS" -Message "Disabled user: $_"
                 $userInfos = Print-Users
             }
         }
@@ -1184,8 +1132,7 @@ function Remove-RDP-Users {
         
         # Read users from file with error handling
         try {
-            $users = Get-Content ".\users.txt" -ErrorAction Stop
-            if ($users.Count -eq 0) {
+            $users = Get-Content ".\users.txt"            if ($users.Count -eq 0) {
                 Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "users.txt is empty for RDP removal"
                 throw "users.txt is empty"
@@ -1210,8 +1157,7 @@ function Remove-RDP-Users {
         
         foreach ($user in $usersToRemove) {
             try {
-                Remove-LocalGroupMember -Name "Remote Desktop Users" -Member $user -Confirm:$false -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Removed $($user.Name) from Remote Desktop Users group"
+                Remove-LocalGroupMember -Name "Remote Desktop Users" -Member $user -Confirm:$false                Write-Log -Level "SUCCESS" -Message "Removed $($user.Name) from Remote Desktop Users group"
             } catch {
                 # User might not be in the group, which is fine
                 Write-Verbose "User $($user.Name) not in Remote Desktop Users group or already removed"
@@ -1435,14 +1381,12 @@ function Disable-Unnecessary-Services {
     
     Invoke-HardeningOperation -OperationName "Disable Unnecessary Services" -ScriptBlock {
         # Get all active network adapters
-        $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } -ErrorAction SilentlyContinue
-        
+        $activeAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }        
         if ($activeAdapters) {
             # Loop through each active adapter and disable IPv6
             foreach ($adapter in $activeAdapters) {
                 try {
-                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6 -ErrorAction Stop
-                    Write-Log -Level "SUCCESS" -Message "Disabled IPv6 on adapter: $($adapter.Name)"
+                    Disable-NetAdapterBinding -Name $adapter.Name -ComponentID ms_tcpip6                    Write-Log -Level "SUCCESS" -Message "Disabled IPv6 on adapter: $($adapter.Name)"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not disable IPv6 on adapter $($adapter.Name): $($_.Exception.Message)"
                 }
@@ -1451,8 +1395,7 @@ function Disable-Unnecessary-Services {
         
         # Get all IP-enabled adapters and disable NetBIOS over TCP/IP
         try {
-            $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" -ErrorAction Stop
-            foreach ($adapter in $adapters) {
+            $adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"            foreach ($adapter in $adapters) {
                 try {
                     # Disable NetBIOS over TCP/IP (NetbiosOptions = 2)
                     $adapter.SetTcpipNetbios(2) | Out-Null
@@ -1497,16 +1440,13 @@ function Enable-Windows-Defender {
         Write-Host "[ACTION] Starting Windows Defender service..." -ForegroundColor White
         try {
             # Check if service exists
-            $defenderService = Get-Service -Name WinDefend -ErrorAction SilentlyContinue
-            if (-not $defenderService) {
+            $defenderService = Get-Service -Name WinDefend            if (-not $defenderService) {
                 Write-Host "  [WARNING] Windows Defender service (WinDefend) not found on this OS version" -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "Windows Defender service not found on $($script:OSInfo.OSVersion)"
                 $operationSuccess["ServiceStart"] = $false
                 $allOperationsSucceeded = $false
             } else {
-                Start-Service -Name WinDefend -ErrorAction Stop
-                Set-Service -Name WinDefend -StartupType Automatic -ErrorAction Stop
-                Write-Host "  [SUCCESS] Windows Defender service started and set to automatic" -ForegroundColor Green
+                Start-Service -Name WinDefend                Set-Service -Name WinDefend -StartupType Automatic                Write-Host "  [SUCCESS] Windows Defender service started and set to automatic" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Windows Defender service started and set to automatic"
                 $operationSuccess["ServiceStart"] = $true
             }
@@ -1529,7 +1469,7 @@ function Enable-Windows-Defender {
         $pathsToCreate = @($defenderPath, $defenderScanPath, $defenderRealTimeProtectionPath, $defenderReportingPath, $defenderSpynetPath)
         foreach ($path in $pathsToCreate) {
             if (-not (Test-Path $path)) {
-                New-Item -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
+                New-Item -Path $path -Force | Out-Null
             }
         }
         
@@ -1566,7 +1506,7 @@ function Enable-Windows-Defender {
         foreach ($path in $defenderSettings.Keys) {
             if (-not (Test-Path $path)) {
                 try {
-                    New-Item -Path $path -Force -ErrorAction Stop | Out-Null
+                    New-Item -Path $path -Force | Out-Null
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not create registry path $path : $($_.Exception.Message)"
                     $registrySuccess = $false
@@ -1574,7 +1514,7 @@ function Enable-Windows-Defender {
             }
             foreach ($name in $defenderSettings[$path].Keys) {
                 try {
-                    New-ItemProperty -Path $path -Name $name -Value $defenderSettings[$path][$name] -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+                    New-ItemProperty -Path $path -Name $name -Value $defenderSettings[$path][$name] -PropertyType DWORD -Force | Out-Null
                     Write-Verbose "Set Defender registry: $path\$name = $($defenderSettings[$path][$name])"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not set Defender registry $path\$name : $($_.Exception.Message)"
@@ -1593,9 +1533,9 @@ function Enable-Windows-Defender {
             Write-Host "[ACTION] Enabling Tamper Protection (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
             try {
                 if (-not (Test-Path $defenderFeaturesPath)) {
-                    New-Item -Path $defenderFeaturesPath -Force -ErrorAction Stop | Out-Null
+                    New-Item -Path $defenderFeaturesPath -Force | Out-Null
                 }
-                New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force | Out-Null
                 Write-Host "  [SUCCESS] Tamper Protection enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled Tamper Protection"
                 $operationSuccess["TamperProtection"] = $true
@@ -1637,7 +1577,7 @@ function Enable-Windows-Defender {
                 $asrEnabledCount = 0
                 foreach ($ruleId in $asrRules) {
                     try {
-                        Add-MpPreference -AttackSurfaceReductionRules_Ids $ruleId -AttackSurfaceReductionRules_Actions Enabled -ErrorAction Stop | Out-Null
+                        Add-MpPreference -AttackSurfaceReductionRules_Ids $ruleId -AttackSurfaceReductionRules_Actions Enabled | Out-Null
                         $asrEnabledCount++
                     } catch {
                         Write-Verbose "Could not enable ASR rule $ruleId (may already be enabled or not supported)"
@@ -1666,31 +1606,30 @@ function Enable-Windows-Defender {
         
         # Remove exclusions
         try {
-            $prefs = Get-MpPreference -ErrorAction SilentlyContinue
-            if ($prefs) {
+            $prefs = Get-MpPreference            if ($prefs) {
                 if ($prefs.AttackSurfaceReductionOnlyExclusions) {
                     foreach ($ExcludedASR in $prefs.AttackSurfaceReductionOnlyExclusions) {
-                        Remove-MpPreference -AttackSurfaceReductionOnlyExclusions $ExcludedASR -ErrorAction SilentlyContinue | Out-Null
+                        Remove-MpPreference -AttackSurfaceReductionOnlyExclusions $ExcludedASR | Out-Null
                     }
                 }
                 if ($prefs.ExclusionExtension) {
                     foreach ($ExcludedExt in $prefs.ExclusionExtension) {
-                        Remove-MpPreference -ExclusionExtension $ExcludedExt -ErrorAction SilentlyContinue | Out-Null
+                        Remove-MpPreference -ExclusionExtension $ExcludedExt | Out-Null
                     }
                 }
                 if ($prefs.ExclusionIpAddress) {
                     foreach ($ExcludedIp in $prefs.ExclusionIpAddress) {
-                        Remove-MpPreference -ExclusionIpAddress $ExcludedIp -ErrorAction SilentlyContinue | Out-Null
+                        Remove-MpPreference -ExclusionIpAddress $ExcludedIp | Out-Null
                     }
                 }
                 if ($prefs.ExclusionPath) {
                     foreach ($ExcludedDir in $prefs.ExclusionPath) {
-                        Remove-MpPreference -ExclusionPath $ExcludedDir -ErrorAction SilentlyContinue | Out-Null
+                        Remove-MpPreference -ExclusionPath $ExcludedDir | Out-Null
                     }
                 }
                 if ($prefs.ExclusionProcess) {
                     foreach ($ExcludedProc in $prefs.ExclusionProcess) {
-                        Remove-MpPreference -ExclusionProcess $ExcludedProc -ErrorAction SilentlyContinue | Out-Null
+                        Remove-MpPreference -ExclusionProcess $ExcludedProc | Out-Null
                     }
                 }
                 Write-Log -Level "SUCCESS" -Message "Removed Defender exclusions"
@@ -1705,15 +1644,10 @@ function Enable-Windows-Defender {
         Write-Host "[ACTION] Enabling Windows Defender real-time monitoring and protection features..." -ForegroundColor White
         try {
             # Enable Real-time Monitoring
-            Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction Stop
-            $operationSuccess["RealTimeMonitoring"] = $true
+            Set-MpPreference -DisableRealtimeMonitoring $false            $operationSuccess["RealTimeMonitoring"] = $true
             
             # Enable other protection features
-            Set-MpPreference -DisableBehaviorMonitoring $false -ErrorAction Stop
-            Set-MpPreference -DisableBlockAtFirstSeen $false -ErrorAction Stop
-            Set-MpPreference -DisableIOAVProtection $false -ErrorAction Stop
-            Set-MpPreference -DisableScriptScanning $false -ErrorAction Stop
-            $operationSuccess["ProtectionFeatures"] = $true
+            Set-MpPreference -DisableBehaviorMonitoring $false            Set-MpPreference -DisableBlockAtFirstSeen $false            Set-MpPreference -DisableIOAVProtection $false            Set-MpPreference -DisableScriptScanning $false            $operationSuccess["ProtectionFeatures"] = $true
             
             Write-Host "  [SUCCESS] Windows Defender protection features enabled via PowerShell cmdlets" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Enabled Windows Defender protection features via Set-MpPreference"
@@ -1726,8 +1660,7 @@ function Enable-Windows-Defender {
         
         # Verify Defender is enabled
         try {
-            $defenderStatus = Get-MpPreference -ErrorAction Stop
-            if ($defenderStatus.DisableRealtimeMonitoring -eq $false) {
+            $defenderStatus = Get-MpPreference            if ($defenderStatus.DisableRealtimeMonitoring -eq $false) {
                 $script:DefenderStatus = "Enabled"
                 Write-Host "  [SUCCESS] Verified: Windows Defender is enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Verified Windows Defender is enabled"
@@ -1746,8 +1679,7 @@ function Enable-Windows-Defender {
         
         # Verify service is running
         try {
-            $serviceStatus = Get-Service WinDefend -ErrorAction Stop
-            if ($serviceStatus.Status -eq "Running") {
+            $serviceStatus = Get-Service WinDefend            if ($serviceStatus.Status -eq "Running") {
                 Write-Host "  [SUCCESS] Windows Defender service is running" -ForegroundColor Green
                 $operationSuccess["ServiceRunning"] = $true
             } else {
@@ -1894,8 +1826,7 @@ function Quick-Harden {
             # Read competition users from users.txt
             if (Test-Path ".\users.txt") {
                 Start-Sleep -Milliseconds 500  # Ensure file is fully written
-                $competitionUsers = Get-Content ".\users.txt" -ErrorAction Stop
-                if ($competitionUsers.Count -eq 0) {
+                $competitionUsers = Get-Content ".\users.txt"                if ($competitionUsers.Count -eq 0) {
                     Write-Host "  [WARNING] users.txt is empty, skipping user disabling" -ForegroundColor Yellow
                 } else {
                     # Get all LOCAL users (not AD users)
@@ -1906,8 +1837,7 @@ function Quick-Harden {
                     foreach ($user in $localUsers) {
                         if ($user.Name -notin $competitionUsers) {
                             try {
-                                Disable-LocalUser -Name $user.Name -ErrorAction Stop
-                                Write-Host "  [SUCCESS] Disabled user: $($user.Name)" -ForegroundColor Green
+                                Disable-LocalUser -Name $user.Name                                Write-Host "  [SUCCESS] Disabled user: $($user.Name)" -ForegroundColor Green
                                 Write-Log -Level "SUCCESS" -Message "Disabled user: $($user.Name)"
                                 $disabledCount++
                             } catch {
@@ -1929,8 +1859,7 @@ function Quick-Harden {
         # Step 10: Set Execution Policy
         Write-Host "`n10. Setting Execution Policy to RemoteSigned..." -ForegroundColor Cyan
         try {
-            Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction Stop
-            Write-Host "Execution Policy set to RemoteSigned successfully" -ForegroundColor Green
+            Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force            Write-Host "Execution Policy set to RemoteSigned successfully" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Set Execution Policy to RemoteSigned"
         } catch {
             Write-Host "Failed to set Execution Policy: $($_.Exception.Message)" -ForegroundColor Red
@@ -1963,8 +1892,7 @@ function Download-Install-Setup-Splunk {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $downloadURL = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/splunk/splunk.ps1"
             
-            Invoke-WebRequest -Uri $downloadURL -OutFile ./splunk.ps1 -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Downloaded Splunk installation script"
+            Invoke-WebRequest -Uri $downloadURL -OutFile ./splunk.ps1            Write-Log -Level "SUCCESS" -Message "Downloaded Splunk installation script"
             
             $splunkServer = "$($IP):9997"
             
@@ -2036,8 +1964,7 @@ function Install-EternalBluePatch {
         # Install the patch
         Write-Host "Installing patch..." -ForegroundColor Cyan
         try {
-            $process = Start-Process -FilePath "wusa.exe" -ArgumentList "$path /quiet /norestart" -Wait -PassThru -ErrorAction Stop
-            if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+            $process = Start-Process -FilePath "wusa.exe" -ArgumentList "$path /quiet /norestart" -Wait -PassThru            if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
                 throw "Patch installation returned exit code: $($process.ExitCode)"
             }
             Write-Log -Level "SUCCESS" -Message "EternalBlue patch installed successfully"
@@ -2049,8 +1976,7 @@ function Install-EternalBluePatch {
         } finally {
             # Cleanup
             if (Test-Path $path) {
-                Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
-            }
+                Remove-Item -Path $path -Force            }
         }
         
         Write-Host "Patch for $($script:OSInfo.OSVersion) installed successfully!" -ForegroundColor Green
@@ -2075,8 +2001,7 @@ function Upgrade-SMB {
         if (-not (Get-Module -ListAvailable -Name SmbShare)) {
             Write-Host "[WARNING] SMB module not available. Attempting to import..." -ForegroundColor Yellow
             try {
-                Import-Module SmbShare -ErrorAction Stop
-                Write-Log -Level "SUCCESS" -Message "Imported SMB module"
+                Import-Module SmbShare                Write-Log -Level "SUCCESS" -Message "Imported SMB module"
             } catch {
                 Write-Host "[WARNING] Could not import SMB module. SMB configuration may not work correctly." -ForegroundColor Yellow
                 Write-Log -Level "WARNING" -Message "SMB module not available: $($_.Exception.Message)"
@@ -2086,8 +2011,7 @@ function Upgrade-SMB {
         try {
             # Detect the current SMB version
             Write-Host "[INFO] Detecting current SMB configuration..." -ForegroundColor Cyan
-            $smbConfig = Get-SmbServerConfiguration -ErrorAction Stop
-            $smbv1Enabled = $smbConfig.EnableSMB1Protocol
+            $smbConfig = Get-SmbServerConfiguration            $smbv1Enabled = $smbConfig.EnableSMB1Protocol
             $smbv2Enabled = $smbConfig.EnableSMB2Protocol
             # EnableSMB3Protocol property may not exist on all OS versions, use try-catch
             $smbv3Enabled = $null
@@ -2109,8 +2033,7 @@ function Upgrade-SMB {
             # Enable SMBv2 (SMBv3 is enabled automatically if supported on Server 2012+ and Windows 8+)
             if ($smbv2Enabled -eq $false) {
                 Write-Host "[ACTION] Enabling SMBv2..." -ForegroundColor Yellow
-                Set-SmbServerConfiguration -EnableSMB2Protocol $true -Force -ErrorAction Stop
-                Write-Host "[SUCCESS] SMBv2 enabled" -ForegroundColor Green
+                Set-SmbServerConfiguration -EnableSMB2Protocol $true -Force                Write-Host "[SUCCESS] SMBv2 enabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Enabled SMBv2/SMBv3"
                 $restart = $true
             } else {
@@ -2121,8 +2044,7 @@ function Upgrade-SMB {
             # Disable SMBv1 (vulnerable protocol)
             if ($smbv1Enabled -eq $true) {
                 Write-Host "[ACTION] Disabling SMBv1 (vulnerable protocol)..." -ForegroundColor Yellow
-                Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force -ErrorAction Stop
-                Write-Host "[SUCCESS] SMBv1 disabled" -ForegroundColor Green
+                Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force                Write-Host "[SUCCESS] SMBv1 disabled" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Disabled SMBv1"
                 $restart = $true
             } else {
@@ -2186,8 +2108,7 @@ function Run-Windows-Updates {
         
         try {
             Write-Host "  [ACTION] Stopping Windows Update service..." -ForegroundColor White
-            Stop-Service -Name wuauserv -Force -ErrorAction Stop
-            Write-Host "  [SUCCESS] Windows Update service stopped" -ForegroundColor Green
+            Stop-Service -Name wuauserv -Force            Write-Host "  [SUCCESS] Windows Update service stopped" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Stopped Windows Update service"
         } catch {
             Write-Host "  [WARNING] Could not stop Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -2197,8 +2118,7 @@ function Run-Windows-Updates {
         try {
             if (Test-Path "C:\Windows\SoftwareDistribution") {
                 Write-Host "  [ACTION] Clearing SoftwareDistribution folder..." -ForegroundColor White
-                Remove-Item -Path "C:\Windows\SoftwareDistribution\*" -Recurse -Force -ErrorAction Stop
-                Write-Host "  [SUCCESS] Windows Update cache cleared" -ForegroundColor Green
+                Remove-Item -Path "C:\Windows\SoftwareDistribution\*" -Recurse -Force                Write-Host "  [SUCCESS] Windows Update cache cleared" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Cleared Windows Update cache"
             } else {
                 Write-Host "  [INFO] SoftwareDistribution folder not found, nothing to clear" -ForegroundColor Gray
@@ -2210,8 +2130,7 @@ function Run-Windows-Updates {
         
         try {
             Write-Host "  [ACTION] Starting Windows Update service..." -ForegroundColor White
-            Start-Service -Name wuauserv -ErrorAction Stop
-            Write-Host "  [SUCCESS] Windows Update service started" -ForegroundColor Green
+            Start-Service -Name wuauserv            Write-Host "  [SUCCESS] Windows Update service started" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Started Windows Update service"
         } catch {
             Write-Host "  [WARNING] Could not start Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -2246,12 +2165,9 @@ function Run-Windows-Updates {
         $script:WindowsUpdateStatus = "Unknown"
         try {
             Write-Host "  [INFO] Connecting to Windows Update service..." -ForegroundColor White
-            $wuSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
-            $wuSearcher = $wuSession.CreateUpdateSearcher() -ErrorAction Stop
-            
+            $wuSession = New-Object -ComObject Microsoft.Update.Session            $wuSearcher = $wuSession.CreateUpdateSearcher()            
             Write-Host "  [INFO] Searching for updates (this may take several minutes)..." -ForegroundColor White
-            $searchResult = $wuSearcher.Search("IsInstalled=0 and Type='Software'") -ErrorAction Stop
-            
+            $searchResult = $wuSearcher.Search("IsInstalled=0 and Type='Software'")            
             if ($searchResult.Updates.Count -gt 0) {
                 Write-Host "  [SUCCESS] Found $($searchResult.Updates.Count) update(s) to install" -ForegroundColor Green
                 Write-Log -Level "INFO" -Message "Found $($searchResult.Updates.Count) update(s) to install" -Console
@@ -2268,8 +2184,7 @@ function Run-Windows-Updates {
                 Write-Progress -Activity "Installing Windows Updates" -Status "0% Complete" -PercentComplete 0
                 
                 # Create update collection for downloads
-                $updatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
-                
+                $updatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl                
                 # Add updates that need to be downloaded
                 foreach ($update in $searchResult.Updates) {
                     if ($update.IsDownloaded -eq $false) {
@@ -2308,12 +2223,9 @@ function Run-Windows-Updates {
                     
                     # Install update
                     try {
-                        $installer = $wuSession.CreateUpdateInstaller() -ErrorAction Stop
-                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
-                        $updatesToInstall.Add($update) | Out-Null
+                        $installer = $wuSession.CreateUpdateInstaller()                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl                        $updatesToInstall.Add($update) | Out-Null
                         $installer.Updates = $updatesToInstall
-                        $installResult = $installer.Install() -ErrorAction Stop
-                        
+                        $installResult = $installer.Install()                        
                         if ($installResult.ResultCode -eq 2) {
                             Write-Host "    [SUCCESS] Update installed successfully" -ForegroundColor Green
                             Write-Log -Level "SUCCESS" -Message "Installed update: $($update.Title)"
@@ -2419,8 +2331,7 @@ function Run-StanfordHarden {
         
         # Start Defender Service
         try {
-            Start-Service -Name WinDefend -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Started Windows Defender service"
+            Start-Service -Name WinDefend            Write-Log -Level "SUCCESS" -Message "Started Windows Defender service"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not start Windows Defender service: $($_.Exception.Message)"
         }
@@ -2437,7 +2348,7 @@ function Run-StanfordHarden {
         $pathsToCreate = @($defenderPath, $defenderScanPath, $defenderRealTimeProtectionPath, $defenderReportingPath, $defenderSpynetPath)
         foreach ($path in $pathsToCreate) {
             if (-not (Test-Path $path)) {
-                New-Item -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
+                New-Item -Path $path -Force | Out-Null
             }
         }
         
@@ -2461,9 +2372,9 @@ function Run-StanfordHarden {
         foreach ($regValue in $defenderRegValues) {
             try {
                 if (-not (Test-Path $regValue.Path)) {
-                    New-Item -Path $regValue.Path -Force -ErrorAction SilentlyContinue | Out-Null
+                    New-Item -Path $regValue.Path -Force | Out-Null
                 }
-                New-ItemProperty -Path $regValue.Path -Name $regValue.Name -Value $regValue.Value -PropertyType $regValue.Type -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -Path $regValue.Path -Name $regValue.Name -Value $regValue.Value -PropertyType $regValue.Type -Force | Out-Null
             } catch {
                 Write-Verbose "Could not set Defender registry: $($regValue.Path)\$($regValue.Name)"
             }
@@ -2473,9 +2384,9 @@ function Run-StanfordHarden {
         if ($script:OSInfo.OSFamily -in "Client10", "Client11", "Server2019", "Server2022") {
             try {
                 if (-not (Test-Path $defenderFeaturesPath)) {
-                    New-Item -Path $defenderFeaturesPath -Force -ErrorAction SilentlyContinue | Out-Null
+                    New-Item -Path $defenderFeaturesPath -Force | Out-Null
                 }
-                New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -Path $defenderFeaturesPath -Name "TamperProtection" -Value 5 -PropertyType DWORD -Force | Out-Null
                 Write-Log -Level "SUCCESS" -Message "Enabled Tamper Protection"
             } catch {
                 Write-Verbose "Could not enable Tamper Protection (may already be enabled)"
@@ -2484,17 +2395,14 @@ function Run-StanfordHarden {
         
         # Start Windows Update Service and set startup type to automatic
         try {
-            Set-Service -Name wuauserv -StartupType Automatic -ErrorAction Stop
-            Start-Service -Name wuauserv -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Configured Windows Update service"
+            Set-Service -Name wuauserv -StartupType Automatic            Start-Service -Name wuauserv            Write-Log -Level "SUCCESS" -Message "Configured Windows Update service"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not configure Windows Update service: $($_.Exception.Message)"
         }
         
         # Delete netlogon fullsecurechannelprotection then add a new key with it enabled
         try {
-            Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name 'FullSecureChannelProtection' -Force -ErrorAction SilentlyContinue
-            New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name 'FullSecureChannelProtection' -Value 1 -PropertyType DWORD -Force -ErrorAction Stop | Out-Null
+            Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name 'FullSecureChannelProtection' -Force            New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name 'FullSecureChannelProtection' -Value 1 -PropertyType DWORD -Force | Out-Null
             Write-Log -Level "SUCCESS" -Message "Enabled FullSecureChannelProtection"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not configure FullSecureChannelProtection: $($_.Exception.Message)"
@@ -2502,9 +2410,7 @@ function Run-StanfordHarden {
         
         # Disable the print spooler and make it never start
         try {
-            Get-Service -Name Spooler | Stop-Service -Force -ErrorAction SilentlyContinue
-            Set-Service -Name Spooler -StartupType Disabled -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Disabled Print Spooler service"
+            Get-Service -Name Spooler | Stop-Service -Force            Set-Service -Name Spooler -StartupType Disabled            Write-Log -Level "SUCCESS" -Message "Disabled Print Spooler service"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not disable Print Spooler: $($_.Exception.Message)"
         }
@@ -2523,9 +2429,7 @@ function Run-StanfordHarden {
         
         # Disables editing registry remotely
         try {
-            Get-Service -Name RemoteRegistry | Stop-Service -Force -ErrorAction SilentlyContinue
-            Set-Service -Name RemoteRegistry -StartupType Disabled -ErrorAction Stop
-            Write-Log -Level "SUCCESS" -Message "Disabled Remote Registry service"
+            Get-Service -Name RemoteRegistry | Stop-Service -Force            Set-Service -Name RemoteRegistry -StartupType Disabled            Write-Log -Level "SUCCESS" -Message "Disabled Remote Registry service"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not disable Remote Registry: $($_.Exception.Message)"
         }
@@ -2548,10 +2452,7 @@ function Run-StanfordHarden {
                     reg delete $regPath /f 2>$null | Out-Null
                     
                     # Take ownership and remove file
-                    Start-Process takeown.exe -ArgumentList "/f $file" -NoNewWindow -Wait -ErrorAction SilentlyContinue
-                    Start-Process icacls.exe -ArgumentList "$file /grant administrators:F" -NoNewWindow -Wait -ErrorAction SilentlyContinue
-                    Remove-Item -Path $file -Force -ErrorAction Stop
-                    Write-Log -Level "SUCCESS" -Message "Removed backdoor file: $fileName"
+                    Start-Process takeown.exe -ArgumentList "/f $file" -NoNewWindow -Wait                    Start-Process icacls.exe -ArgumentList "$file /grant administrators:F" -NoNewWindow -Wait                    Remove-Item -Path $file -Force                    Write-Log -Level "SUCCESS" -Message "Removed backdoor file: $fileName"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not remove backdoor file $file : $($_.Exception.Message)"
                 }
@@ -2560,8 +2461,7 @@ function Run-StanfordHarden {
         
         # Delete Scheduled Tasks
         try {
-            Get-ScheduledTask | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
-            Write-Log -Level "SUCCESS" -Message "Removed scheduled tasks"
+            Get-ScheduledTask | Unregister-ScheduledTask -Confirm:$false            Write-Log -Level "SUCCESS" -Message "Removed scheduled tasks"
         } catch {
             Write-Log -Level "WARNING" -Message "Could not remove all scheduled tasks: $($_.Exception.Message)"
         }
@@ -2752,8 +2652,7 @@ function Run-All {
     
     Write-Host "Enabling Firewall logging successful and blocked connections" -ForegroundColor Green
     try {
-        Set-NetFirewallProfile -Profile Domain,Public,Private -LogAllowed True -LogBlocked True -ErrorAction Stop
-        Write-Log -Level "SUCCESS" -Message "Enabled firewall logging"
+        Set-NetFirewallProfile -Profile Domain,Public,Private -LogAllowed True -LogBlocked True        Write-Log -Level "SUCCESS" -Message "Enabled firewall logging"
     } catch {
         Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
     }
@@ -2795,8 +2694,7 @@ function Run-All {
     
     Write-Host "***Setting Execution Policy back to Restricted***" -ForegroundColor Red
     try {
-        Set-ExecutionPolicy Restricted -Scope Process -Force -ErrorAction Stop
-        Update-Log "Set Execution Policy" "Executed successfully"
+        Set-ExecutionPolicy Restricted -Scope Process -Force        Update-Log "Set Execution Policy" "Executed successfully"
         Write-Log -Level "SUCCESS" -Message "Set execution policy to Restricted"
     } catch {
         Update-Log "Set Execution Policy" "Failed with error: $($_.Exception.Message)"
@@ -2893,8 +2791,7 @@ while ($true) {
                 }
                 Write-Host "Enabling Firewall logging successful and blocked connections" -ForegroundColor Green
                 try {
-                    Set-NetFirewallProfile -Profile Domain,Public,Private -LogAllowed True -LogBlocked True -ErrorAction Stop
-                    Write-Log -Level "SUCCESS" -Message "Enabled firewall logging"
+                    Set-NetFirewallProfile -Profile Domain,Public,Private -LogAllowed True -LogBlocked True                    Write-Log -Level "SUCCESS" -Message "Enabled firewall logging"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
                 }
@@ -2913,8 +2810,7 @@ while ($true) {
             '17' { 
                 Write-Host "`n***Setting Execution Policy back to Restricted...***" -ForegroundColor Magenta
                 try {
-                    Set-ExecutionPolicy Restricted -Scope Process -Force -ErrorAction Stop
-                    Update-Log "Set Execution Policy" "Executed successfully"
+                    Set-ExecutionPolicy Restricted -Scope Process -Force                    Update-Log "Set Execution Policy" "Executed successfully"
                     Write-Log -Level "SUCCESS" -Message "Set execution policy to Restricted"
                 } catch {
                     Update-Log "Set Execution Policy" "Failed with error: $($_.Exception.Message)"
