@@ -14,20 +14,11 @@
     - Windows 10
     - Windows 11
     
-.PARAMETER WhatIf
-    Shows what would happen if the script runs without actually making changes.
-    
-.PARAMETER Verbose
-    Provides detailed output during script execution.
-    
 .PARAMETER LogPath
     Specifies the path for log files. Default: C:\Windows\Logs\Hardening
     
 .EXAMPLE
-    .\Local-Hardening2.ps1 -Verbose
-    
-.EXAMPLE
-    .\Local-Hardening2.ps1 -WhatIf
+    .\Local-Hardening2.ps1
     
 .NOTES
     Version: 2.0
@@ -40,10 +31,8 @@
            enhanced user feedback, and comprehensive logging
 #>
 
-[CmdletBinding(SupportsShouldProcess=$true)]
+[CmdletBinding()]
 param(
-    [switch]$WhatIf,
-    [switch]$Verbose,
     [string]$LogPath = "C:\Windows\Logs\Hardening"
 )
 
@@ -295,8 +284,8 @@ function Write-Log {
         }
     }
     
-    # Write to console if requested or if Verbose
-    if ($Console -or $Verbose -or $Level -in "ERROR", "CRITICAL", "WARNING") {
+    # Write to console if requested
+    if ($Console -or $Level -in "ERROR", "CRITICAL", "WARNING") {
         $color = switch ($Level) {
             "SUCCESS" { "Green" }
             "WARNING" { "Yellow" }
@@ -465,13 +454,6 @@ function Invoke-HardeningOperation {
         }
     }
     
-    # Check WhatIf
-    if ($WhatIf) {
-        Write-Host "[WHATIF] Would execute: $OperationName" -ForegroundColor Cyan
-        Write-Log -Level "INFO" -Message "[WHATIF] Would execute: $OperationName"
-        return
-    }
-    
     try {
         Write-Host "`n[EXECUTING] $OperationName..." -ForegroundColor Cyan
         if ($ProgressMessage) {
@@ -512,11 +494,9 @@ function Invoke-HardeningOperation {
             Write-Host "`n[CRITICAL] Operation '$OperationName' failed. This is a critical operation." -ForegroundColor Red
             Write-Log -Level "CRITICAL" -Message "Critical operation failed: $OperationName" -Console
             
-            if (-not $WhatIf) {
-                $continue = Read-Host "Continue with remaining operations? (y/n)"
-                if ($continue -ne "y" -and $continue -ne "Y") {
-                    throw "Script halted due to critical error in: $OperationName"
-                }
+            $continue = Read-Host "Continue with remaining operations? (y/n)"
+            if ($continue -ne "y" -and $continue -ne "Y") {
+                throw "Script halted due to critical error in: $OperationName"
             }
         }
     }
@@ -1918,7 +1898,7 @@ function Run-Windows-Updates {
                     $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
                     Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($_.Title)" -PercentComplete $percentComplete
                     
-                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates : $($_.Title)" -ForegroundColor Cyan
+                    Write-Host "  [ACTION] Installing update $updateCounter of $totalUpdates:$($_.Title)" -ForegroundColor Cyan
                     
                     # Install update
                     try {
