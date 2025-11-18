@@ -954,6 +954,9 @@ function Get-Set-Password {
     )
     
     try {
+        # Verify user exists first
+        $localUser = Get-LocalUser -Name $user -ErrorAction Stop
+        
         $pw = Read-Host -AsSecureString -Prompt "New password for '$user'?"
         $conf = Read-Host -AsSecureString -Prompt "Confirm password"
         
@@ -962,8 +965,70 @@ function Get-Set-Password {
         $confPlainText = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($conf))
         
         if ($pwPlainText -eq $confPlainText -and $pwPlainText -ne "") {
-            Get-LocalUser -Name $user | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $pwPlainText -Force) -ErrorAction Stop
-            Write-Host "Success!!`n" -ForegroundColor Green
+            # Attempt to set the password
+            try {
+                $securePassword = ConvertTo-SecureString -AsPlainText $pwPlainText -Force
+                $localUser | Set-LocalUser -Password $securePassword -ErrorAction Stop
+                
+                # Verify the password was actually changed by attempting to read user again
+                # (This is a basic verification - the Set-LocalUser should throw if it fails)
+                $verifyUser = Get-LocalUser -Name $user -ErrorAction Stop
+                
+                Write-Host "[SUCCESS] Password updated for user: $user" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Password updated for user: $user"
+                
+                # Clear the plaintext passwords from memory
+                $pwPlainText = $null
+                $confPlainText = $null
+                $securePassword = $null
+                [System.GC]::Collect()
+                $pw.Dispose()
+                $conf.Dispose()
+                return $true
+            } catch [Microsoft.PowerShell.Commands.PasswordException] {
+                Write-Host "[FAILED] Password for $user does not meet complexity requirements" -ForegroundColor Red
+                Write-Host "Password must meet the following requirements:" -ForegroundColor Yellow
+                Write-Host "  - At least 8 characters long" -ForegroundColor Yellow
+                Write-Host "  - Contains uppercase letters (A-Z)" -ForegroundColor Yellow
+                Write-Host "  - Contains lowercase letters (a-z)" -ForegroundColor Yellow
+                Write-Host "  - Contains numbers (0-9)" -ForegroundColor Yellow
+                Write-Host "  - Contains special characters (!@#$%^&*...)" -ForegroundColor Yellow
+                Write-Host "Error details: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Password for $user failed complexity requirements: $($_.Exception.Message)"
+                
+                # Clear the plaintext passwords from memory
+                $pwPlainText = $null
+                $confPlainText = $null
+                [System.GC]::Collect()
+                $pw.Dispose()
+                $conf.Dispose()
+                return $false
+            } catch [Microsoft.PowerShell.Commands.UserNotFoundException] {
+                Write-Host "[FAILED] User $user not found" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User $user not found when setting password"
+                
+                # Clear the plaintext passwords from memory
+                $pwPlainText = $null
+                $confPlainText = $null
+                [System.GC]::Collect()
+                $pw.Dispose()
+                $conf.Dispose()
+                return $false
+            } catch {
+                Write-Host "[FAILED] Could not update password for $user - $($_.Exception.Message)" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Failed to update password for $user: $($_.Exception.Message)"
+                
+                # Clear the plaintext passwords from memory
+                $pwPlainText = $null
+                $confPlainText = $null
+                [System.GC]::Collect()
+                $pw.Dispose()
+                $conf.Dispose()
+                return $false
+            }
+        } else {
+            Write-Host "[FAILED] Either the passwords didn't match, or you typed nothing" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Password confirmation failed for user: $user"
             
             # Clear the plaintext passwords from memory
             $pwPlainText = $null
@@ -971,14 +1036,16 @@ function Get-Set-Password {
             [System.GC]::Collect()
             $pw.Dispose()
             $conf.Dispose()
-            return $true
-        } else {
-            Write-Host "Either the passwords didn't match, or you typed nothing" -ForegroundColor Yellow
             return $false
         }
+    } catch [Microsoft.PowerShell.Commands.UserNotFoundException] {
+        Write-Host "[FAILED] User $user not found" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "User $user not found"
+        return $false
     } catch {
-        Write-Host $_.Exception.Message "`n"
-        Write-Host "There was an error with your password submission. Try again...`n" -ForegroundColor Yellow
+        Write-Host "[FAILED] Error with password submission for $user: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Please try again...`n" -ForegroundColor Yellow
+        Write-Log -Level "ERROR" -Message "Error in Get-Set-Password for $user: $($_.Exception.Message)"
         return $false
     }
 }
