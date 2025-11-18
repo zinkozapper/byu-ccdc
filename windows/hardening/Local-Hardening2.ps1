@@ -750,7 +750,8 @@ function Initialize-Context {
             if (-not (Test-Path "$pwd\$filename")) {
                 Write-Host "Downloading $filename..." -ForegroundColor Cyan
                 try {
-                    Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$file" -OutFile "$pwd\$filename"                    Write-Log -Level "SUCCESS" -Message "Downloaded $filename"
+                    Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$file" -OutFile "$pwd\$filename"              
+                    Write-Log -Level "SUCCESS" -Message "Downloaded $filename"
                 } catch {
                     Write-Log -Level "WARNING" -Message "Failed to download $filename : $($_.Exception.Message)"
                     throw "Failed to download required file: $filename"
