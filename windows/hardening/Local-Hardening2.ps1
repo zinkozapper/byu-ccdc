@@ -2650,14 +2650,9 @@ function Set-RegistryHardening {
     Displays the main menu.
 #>
 function Show-Main-Menu {
-    [CmdletBinding()]
-    param()
-    
     Clear-Host
     Write-Host "`n==== Local Windows Hardening Menu ====" -ForegroundColor Green
-    Write-Host "Detected OS: $($script:OSInfo.OSVersion) (Build $($script:OSInfo.BuildNumber))" -ForegroundColor Cyan
-    Write-Host "Edition: $($script:OSInfo.Edition)" -ForegroundColor Cyan
-    Write-Host "`nPrerequisites:" -ForegroundColor Yellow
+    Write-Host "Prerequisites:"
     Write-Host "  - (A) Initialize Context BEFORE running hardening tasks" -ForegroundColor Yellow
     Write-Host "  - Configure Splunk (11) works best after Initialize Context (A)" -ForegroundColor Yellow
     Write-Host "`nSelect an option by number (or Q to quit):" -ForegroundColor Cyan
@@ -2665,22 +2660,21 @@ function Show-Main-Menu {
     Write-Host "  A) Initialize Context (download files, set variables)"
     Write-Host "  1) Run Full Flow (original y/n prompts)"
     Write-Host "  2) Quick Harden (essential steps only)"
-    Write-Host "  3) Get Competition Users"
-    Write-Host "  4) Disable Users (except current user)"
-    Write-Host "  5) Enable Windows Defender"
-    Write-Host "  6) Add Competition Users"
+    Write-Host "  3) Get Competition Users" #3
+    Write-Host "  4) Disable Users (except current user)" #2 Passwords Changes | 4 word passphrase from word list -> set all passwords to username + passphrase + print passphrase | make seperate script for this to rederive passwords. List of users + secret -> csv of user, password
+    Write-Host "  5) Enable Windows Defender" #5
+    Write-Host "  6) Add Competition Users" #8
     Write-Host "  7) Remove RDP Users (harden access)"
-    Write-Host "  8) Configure Firewall"
-    Write-Host "  9) Disable Unnecessary Services"
+    Write-Host "  8) Configure Firewall" #4
+    Write-Host "  9) Disable Unnecessary Services" #7
     Write-Host " 10) Enable Advanced Auditing + Firewall Logging"
-    Write-Host " 11) Configure Splunk"
+    Write-Host " 11) Configure Splunk" #9
     Write-Host " 12) Install EternalBlue Patch"
-    Write-Host " 13) Upgrade SMB (enable v2/3, disable v1)"
+    Write-Host " 13) Upgrade SMB (enable v2/3, disable v1)" #1
     Write-Host " 14) Patch Mimikatz (WDigest)"
     Write-Host " 15) Run Windows Updates"
-    Write-Host " 16) Run Stanford Harden"
-    Write-Host " 17) Set Registry Hardening"
-    Write-Host " 18) Set Execution Policy to Restricted"
+    Write-Host " 16) Run Stanford Harden" #REMOVE
+    Write-Host " 17) Set Execution Policy to Restricted" #10
 }
 
 <#
