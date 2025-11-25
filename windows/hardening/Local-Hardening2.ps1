@@ -1051,125 +1051,146 @@ function Add-Competition-Users {
     param()
     
     Invoke-HardeningOperation -OperationName "Add Competition Users" -ScriptBlock {
-        # Initialize array to store the 2 competition users
+        # Initialize array to store the 2 competition users and success counter
         [string[]]$script:UserArray = @()
+        $successCount = 0
+        $totalUsers = 2
         
-        # Prompt for User 1
-        $user1Name = Read-Host "Enter username for user 1"
-        
-        # Validate username is not empty
-        if ([string]::IsNullOrWhiteSpace($user1Name)) {
-            Write-Host "[FAILED] Username cannot be empty" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "User 1 username is empty"
-            throw "Username cannot be empty"
-        }
-        
-        # Check if user already exists
-        $existingUser1 = Get-LocalUser -Name $user1Name -ErrorAction SilentlyContinue
-        if ($existingUser1) {
-            Write-Host "[WARNING] User '$user1Name' already exists, skipping creation" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "User '$user1Name' already exists"
-        } else {
-            $user1Password = Read-Host -AsSecureString "Enter password for user 1"
+        # Helper function to create a user with validation
+        function New-CompetitionUser {
+            param(
+                [string]$Username,
+                [System.Security.SecureString]$Password,
+                [int]$UserNumber,
+                [bool]$IsFirstUser = $false
+            )
             
-            # Validate password is not empty
-            $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($user1Password)).Length
-            if ($passwordLength -eq 0) {
-                Write-Host "[FAILED] Password cannot be empty" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User 1 password is empty"
-                throw "Password cannot be empty"
+            $userCreated = $false
+            
+            # Validate username is not empty
+            if ([string]::IsNullOrWhiteSpace($Username)) {
+                Write-Host "✗ Failed to create user $UserNumber: Username cannot be empty" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User $UserNumber username is empty"
+                return $false
             }
             
-            try {
-                $splat = @{
-                    Name = $user1Name
-                    Password = $user1Password
+            # Check if user already exists
+            $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
+            if ($existingUser) {
+                Write-Host "✓ User $Username already exists (skipping creation)" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "User '$Username' already exists"
+                $userCreated = $true
+            } else {
+                # Validate password is not empty
+                $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
+                if ($passwordLength -eq 0) {
+                    Write-Host "✗ Failed to create user $Username: Password cannot be empty" -ForegroundColor Red
+                    Write-Log -Level "ERROR" -Message "User $Username password is empty"
+                    return $false
                 }
-                New-LocalUser @splat
-                Write-Host "User $user1Name created successfully" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Created user: $user1Name"
-            } catch {
-                Write-Host "[FAILED] Could not create user '$user1Name': $($_.Exception.Message)" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Failed to create user '$user1Name': $($_.Exception.Message)"
-                throw "Failed to create user: $($_.Exception.Message)"
+                
+                # Attempt to create user
+                try {
+                    $splat = @{
+                        Name = $Username
+                        Password = $Password
+                    }
+                    New-LocalUser @splat -ErrorAction Stop
+                    
+                    # Verify user was actually created
+                    Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
+                    $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
+                    
+                    if ($verifyUser) {
+                        Write-Host "✓ User $Username created successfully" -ForegroundColor Green
+                        Write-Log -Level "SUCCESS" -Message "Created user: $Username"
+                        $userCreated = $true
+                    } else {
+                        Write-Host "✗ Failed to create user $Username: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
+                        Write-Log -Level "ERROR" -Message "User creation verification failed for: $Username"
+                        return $false
+                    }
+                } catch {
+                    $errorMessage = $_.Exception.Message
+                    
+                    # Provide more specific error messages for common failures
+                    if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
+                        Write-Host "✗ Failed to create user $Username: Username already exists" -ForegroundColor Red
+                    } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
+                        Write-Host "✗ Failed to create user $Username: Password does not meet complexity requirements" -ForegroundColor Red
+                    } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
+                        Write-Host "✗ Failed to create user $Username: Insufficient permissions to create user" -ForegroundColor Red
+                    } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
+                        Write-Host "✗ Failed to create user $Username: Invalid username format" -ForegroundColor Red
+                    } else {
+                        Write-Host "✗ Failed to create user $Username: $errorMessage" -ForegroundColor Red
+                    }
+                    
+                    Write-Log -Level "ERROR" -Message "Failed to create user '$Username': $errorMessage"
+                    return $false
+                }
             }
+            
+            # Add user to appropriate groups if creation succeeded or user already existed
+            if ($userCreated) {
+                try {
+                    if ($IsFirstUser) {
+                        Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
+                        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
+                        Write-Log -Level "SUCCESS" -Message "Added $Username to Administrators and Remote Desktop Users groups"
+                    } else {
+                        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
+                        Write-Log -Level "SUCCESS" -Message "Added $Username to Remote Desktop Users group"
+                    }
+                } catch {
+                    Write-Log -Level "WARNING" -Message "Could not add $Username to groups: $($_.Exception.Message)"
+                }
+                
+                # Add to UserArray
+                $script:UserArray += $Username
+                return $true
+            }
+            
+            return $false
         }
         
-        # Add User 1 to groups (Administrators and Remote Desktop Users)
-        try {
-            Add-LocalGroupMember -Group "Administrators" -Member $user1Name -ErrorAction SilentlyContinue
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user1Name -ErrorAction SilentlyContinue
-            Write-Log -Level "SUCCESS" -Message "Added $user1Name to Administrators and Remote Desktop Users groups"
-        } catch {
-            Write-Log -Level "WARNING" -Message "Could not add $user1Name to groups: $($_.Exception.Message)"
+        # Prompt for and create User 1
+        $user1Name = Read-Host "Enter username for user 1"
+        $user1Password = Read-Host -AsSecureString "Enter password for user 1"
+        
+        if (New-CompetitionUser -Username $user1Name -Password $user1Password -UserNumber 1 -IsFirstUser $true) {
+            $successCount++
         }
         
-        # Add to UserArray
-        $script:UserArray += $user1Name
-        
-        # Prompt for User 2
+        # Prompt for and create User 2
         Write-Host ""
         $user2Name = Read-Host "Enter username for user 2"
+        $user2Password = Read-Host -AsSecureString "Enter password for user 2"
         
-        # Validate username is not empty
-        if ([string]::IsNullOrWhiteSpace($user2Name)) {
-            Write-Host "[FAILED] Username cannot be empty" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "User 2 username is empty"
-            throw "Username cannot be empty"
+        if (New-CompetitionUser -Username $user2Name -Password $user2Password -UserNumber 2 -IsFirstUser $false) {
+            $successCount++
         }
-        
-        # Check if user already exists
-        $existingUser2 = Get-LocalUser -Name $user2Name -ErrorAction SilentlyContinue
-        if ($existingUser2) {
-            Write-Host "[WARNING] User '$user2Name' already exists, skipping creation" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "User '$user2Name' already exists"
-        } else {
-            $user2Password = Read-Host -AsSecureString "Enter password for user 2"
-            
-            # Validate password is not empty
-            $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($user2Password)).Length
-            if ($passwordLength -eq 0) {
-                Write-Host "[FAILED] Password cannot be empty" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User 2 password is empty"
-                throw "Password cannot be empty"
-            }
-            
-            try {
-                $splat = @{
-                    Name = $user2Name
-                    Password = $user2Password
-                }
-                New-LocalUser @splat
-                Write-Host "User $user2Name created successfully" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Created user: $user2Name"
-            } catch {
-                Write-Host "[FAILED] Could not create user '$user2Name': $($_.Exception.Message)" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Failed to create user '$user2Name': $($_.Exception.Message)"
-                throw "Failed to create user: $($_.Exception.Message)"
-            }
-        }
-        
-        # Add User 2 to Remote Desktop Users group
-        try {
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user2Name -ErrorAction SilentlyContinue
-            Write-Log -Level "SUCCESS" -Message "Added $user2Name to Remote Desktop Users group"
-        } catch {
-            Write-Log -Level "WARNING" -Message "Could not add $user2Name to Remote Desktop Users group: $($_.Exception.Message)"
-        }
-        
-        # Add to UserArray
-        $script:UserArray += $user2Name
         
         # Export user permissions to file
-        $userOutput = Print-Users
-        if ($userOutput -ne $null) {
-            $outputText = $userOutput -join "`n`n"
-            $outputText | Out-File -FilePath "UserPerms.txt" -Encoding UTF8
-            Write-Host "`nUser permissions have been exported to .\UserPerms.txt" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Exported user permissions to UserPerms.txt"
+        if ($script:UserArray.Count -gt 0) {
+            $userOutput = Print-Users
+            if ($userOutput -ne $null) {
+                $outputText = $userOutput -join "`n`n"
+                $outputText | Out-File -FilePath "UserPerms.txt" -Encoding UTF8
+                Write-Host "`nUser permissions have been exported to .\UserPerms.txt" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Exported user permissions to UserPerms.txt"
+            }
         }
         
-        Write-Host "`nCompetition users created successfully!" -ForegroundColor Green
+        # Summary
+        Write-Host ""
+        if ($successCount -eq $totalUsers) {
+            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "All $totalUsers users created successfully"
+        } else {
+            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Only $successCount out of $totalUsers users were created successfully"
+        }
     }
 }
 
@@ -1686,15 +1707,15 @@ function Quick-Harden {
         Initialize-System
         
         # Step 1: Upgrade SMB
-        Write-Host "`nStep 1/8: Upgrading SMB..." -ForegroundColor Cyan
+        Write-Host "`nStep 1/7: Upgrading SMB..." -ForegroundColor Cyan
         Upgrade-SMB
         
         # Step 2: Change Passwords
-        Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
+        Write-Host "`nStep 2/7: Changing Passwords..." -ForegroundColor Cyan
         Change-Passwords
         
         # Step 3: Configure Firewall (uses FirewallPorts parameter or default)
-        Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
+        Write-Host "`nStep 3/7: Configuring Firewall..." -ForegroundColor Cyan
         # Use FirewallPorts parameter if provided, otherwise use default (port 80)
         $portArray = $FirewallPorts
         if ($portArray.Count -eq 0) {
@@ -1741,28 +1762,24 @@ function Quick-Harden {
             Write-Log -Level "ERROR" -Message "Quick harden firewall configuration failed: $($_.Exception.Message)"
         }
         
-        # Step 4: Enable Windows Defender
-        Write-Host "`nStep 4/8: Enabling Windows Defender..." -ForegroundColor Cyan
-        Enable-Windows-Defender
-        
-        # Step 5: Disable unnecessary services
-        Write-Host "`nStep 5/8: Disabling Unnecessary Services..." -ForegroundColor Cyan
+        # Step 4: Disable unnecessary services
+        Write-Host "`nStep 4/7: Disabling Unnecessary Services..." -ForegroundColor Cyan
         Disable-Unnecessary-Services
         
-        # Step 6: Add Competition Users (USER INPUT REQUIRED)
-        Write-Host "`nStep 6/8: Adding Competition Users..." -ForegroundColor Cyan
+        # Step 5: Add Competition Users (USER INPUT REQUIRED)
+        Write-Host "`nStep 5/7: Adding Competition Users..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for usernames/passwords" -ForegroundColor Yellow
         Add-Competition-Users
         
-        # Step 7: Configure Splunk (USER INPUT REQUIRED)
-        Write-Host "`nStep 7/8: Configuring Splunk..." -ForegroundColor Cyan
+        # Step 6: Configure Splunk (USER INPUT REQUIRED)
+        Write-Host "`nStep 6/7: Configuring Splunk..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for Splunk configuration" -ForegroundColor Yellow
         $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
         $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
         Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
         
-        # Step 8: Set Execution Policy to Restricted
-        Write-Host "`nStep 8/8: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
+        # Step 7: Set Execution Policy to Restricted
+        Write-Host "`nStep 7/7: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
         try {
             Set-ExecutionPolicy Restricted -Scope Process -Force
             Write-Host "Execution Policy set to Restricted successfully" -ForegroundColor Green
