@@ -95,7 +95,7 @@ $script:EternalBlueStatus = "Unknown"
 
 # Function names for tracking
 $functionNames = @(
-    "Initialize Context", "Get Competition Users", "Change Passwords", "Enable Windows Defender", 
+    "Initialize Context", "Change Passwords", "Enable Windows Defender", 
     "Quick Harden", "Add Competition Users", "Remove RDP Users", "Configure Firewall", 
     "Disable Unnecessary Services", "Enable Advanced Auditing", "Configure Splunk", 
     "EternalBlue Mitigated", "Upgrade SMB", "Patch Mimikatz", "Run Windows Updates", 
@@ -852,33 +852,6 @@ function Initialize-System {
 
 <#
 .SYNOPSIS
-    Prompts user for competition usernames.
-#>
-function GetCompetitionUsers {
-    [CmdletBinding()]
-    param()
-    
-    Invoke-HardeningOperation -OperationName "Get Competition Users" -ScriptBlock {
-        # Check if users.txt already exists
-        if (Test-Path ".\users.txt") {
-            Write-Host "  [INFO] users.txt already exists, loading existing users" -ForegroundColor Green
-            $verifyContent = Get-Content ".\users.txt"
-            [string[]]$script:UserArray = $verifyContent
-            Write-Log -Level "INFO" -Message "Loaded existing users from users.txt"
-            return
-        }
-        
-        # In automated mode (Quick Harden), skip user input and create a placeholder
-        # This function should be run manually if users.txt doesn't exist
-        Write-Host "  [WARNING] users.txt not found. Skipping user input in automated mode." -ForegroundColor Yellow
-        Write-Host "  [INFO] Please run 'Get Competition Users' manually from the menu to create users.txt" -ForegroundColor Yellow
-        Write-Log -Level "WARNING" -Message "users.txt not found - Get Competition Users skipped in automated mode"
-        throw "users.txt not found - run Get Competition Users manually"
-    }
-}
-
-<#
-.SYNOPSIS
     Generates a random password.
 #>
 function GeneratePassword {
@@ -913,15 +886,15 @@ function Disable-AllUsers {
     try {
         Write-Host "Mass Disable Users" -ForegroundColor Cyan
         
-        # Check if users.txt exists
-        if (-not (Test-Path ".\users.txt")) {
-            Write-Host "[FAILED] users.txt not found. Run 'Get Competition Users' first." -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "users.txt not found for mass disable users"
+        # Check if UserArray has been populated (from Add Competition Users)
+        if ($null -eq $script:UserArray -or $script:UserArray.Count -eq 0) {
+            Write-Host "[FAILED] Competition users not defined. Run 'Add Competition Users' first." -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "UserArray not populated for mass disable users"
             return
         }
         
-        # Read competition users from users.txt
-        $competitionUsers = Get-Content ".\users.txt"
+        # Use competition users from UserArray
+        $competitionUsers = $script:UserArray
         
         Write-Host "`nCompetition users that will be KEPT ENABLED:" -ForegroundColor Yellow
         $competitionUsers | ForEach-Object { Write-Host "  - $_" }
@@ -1071,106 +1044,123 @@ function Get-Set-Password {
 <#
 .SYNOPSIS
     Adds competition-specific users with certain privileges.
+    Prompts user directly for 2 users (username and password for each).
 #>
 function Add-Competition-Users {
     [CmdletBinding()]
     param()
     
     Invoke-HardeningOperation -OperationName "Add Competition Users" -ScriptBlock {
-        # Check if users.txt exists and has content
-        if (-not (Test-Path ".\users.txt")) {
-            Write-Host "users.txt not found. Please run 'Get Competition Users' first." -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "users.txt not found"
-            throw "users.txt not found"
+        # Initialize array to store the 2 competition users
+        [string[]]$script:UserArray = @()
+        
+        # Prompt for User 1
+        $user1Name = Read-Host "Enter username for user 1"
+        
+        # Validate username is not empty
+        if ([string]::IsNullOrWhiteSpace($user1Name)) {
+            Write-Host "[FAILED] Username cannot be empty" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "User 1 username is empty"
+            throw "Username cannot be empty"
         }
         
-        # Wait a moment to ensure file is fully written if it was just created
-        Start-Sleep -Milliseconds 500
+        # Check if user already exists
+        $existingUser1 = Get-LocalUser -Name $user1Name -ErrorAction SilentlyContinue
+        if ($existingUser1) {
+            Write-Host "[WARNING] User '$user1Name' already exists, skipping creation" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "User '$user1Name' already exists"
+        } else {
+            $user1Password = Read-Host -AsSecureString "Enter password for user 1"
+            
+            # Validate password is not empty
+            $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($user1Password)).Length
+            if ($passwordLength -eq 0) {
+                Write-Host "[FAILED] Password cannot be empty" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User 1 password is empty"
+                throw "Password cannot be empty"
+            }
+            
+            try {
+                $splat = @{
+                    Name = $user1Name
+                    Password = $user1Password
+                }
+                New-LocalUser @splat
+                Write-Host "User $user1Name created successfully" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Created user: $user1Name"
+            } catch {
+                Write-Host "[FAILED] Could not create user '$user1Name': $($_.Exception.Message)" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Failed to create user '$user1Name': $($_.Exception.Message)"
+                throw "Failed to create user: $($_.Exception.Message)"
+            }
+        }
         
-        # Read users from file with error handling
+        # Add User 1 to groups (Administrators and Remote Desktop Users)
         try {
-            $users = Get-Content ".\users.txt"
-            if ($users.Count -eq 0) {
-                Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "users.txt is empty"
-                throw "users.txt is empty"
-            }
-            # Update the global UserArray
-            [string[]]$script:UserArray = $users
+            Add-LocalGroupMember -Group "Administrators" -Member $user1Name -ErrorAction SilentlyContinue
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user1Name -ErrorAction SilentlyContinue
+            Write-Log -Level "SUCCESS" -Message "Added $user1Name to Administrators and Remote Desktop Users groups"
         } catch {
-            Write-Host "Failed to read users.txt: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "Failed to read users.txt: $($_.Exception.Message)"
-            throw "Failed to read users.txt: $($_.Exception.Message)"
+            Write-Log -Level "WARNING" -Message "Could not add $user1Name to groups: $($_.Exception.Message)"
         }
         
-        if ($script:UserArray.Count -eq 0) {
-            Write-Host "No users defined in users.txt. Please run 'Get Competition Users' first." -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "No users defined in users.txt"
-            throw "No users defined"
+        # Add to UserArray
+        $script:UserArray += $user1Name
+        
+        # Prompt for User 2
+        Write-Host ""
+        $user2Name = Read-Host "Enter username for user 2"
+        
+        # Validate username is not empty
+        if ([string]::IsNullOrWhiteSpace($user2Name)) {
+            Write-Host "[FAILED] Username cannot be empty" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "User 2 username is empty"
+            throw "Username cannot be empty"
         }
         
-        foreach ($user in $script:UserArray) {
-            if ($user -eq "") { continue }
+        # Check if user already exists
+        $existingUser2 = Get-LocalUser -Name $user2Name -ErrorAction SilentlyContinue
+        if ($existingUser2) {
+            Write-Host "[WARNING] User '$user2Name' already exists, skipping creation" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "User '$user2Name' already exists"
+        } else {
+            $user2Password = Read-Host -AsSecureString "Enter password for user 2"
             
-            # Check if user already exists
-            $existingUser = Get-LocalUser -Name $user
-            if ($existingUser) {
-                Write-Host "User '$user' already exists, skipping creation" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "User '$user' already exists"
-                continue
+            # Validate password is not empty
+            $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($user2Password)).Length
+            if ($passwordLength -eq 0) {
+                Write-Host "[FAILED] Password cannot be empty" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User 2 password is empty"
+                throw "Password cannot be empty"
             }
             
-            $splat = @{
-                Name = $user
-                Password = (ConvertTo-SecureString -String (GeneratePassword) -AsPlainText -Force)
-            }
-            New-LocalUser @splat
-            Write-Log -Level "SUCCESS" -Message "Created user: $user"
-            
-            $userIndex = [array]::IndexOf($script:UserArray, $user)
-            
-            if ($userIndex -eq 0) {
-                Add-LocalGroupMember -Group "Administrators" -Member $user
-                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
-                Write-Log -Level "SUCCESS" -Message "Added $user to Administrators and Remote Desktop Users groups"
-                
-                while ($true) {
-                    if (Get-Set-Password -user $user) { break }
+            try {
+                $splat = @{
+                    Name = $user2Name
+                    Password = $user2Password
                 }
-            }
-            
-            if ($userIndex -eq 1) {
-                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
-                Write-Log -Level "SUCCESS" -Message "Added $user to Remote Desktop Users group"
-                
-                while ($true) {
-                    if (Get-Set-Password -user $user) { break }
-                }
+                New-LocalUser @splat
+                Write-Host "User $user2Name created successfully" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Created user: $user2Name"
+            } catch {
+                Write-Host "[FAILED] Could not create user '$user2Name': $($_.Exception.Message)" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Failed to create user '$user2Name': $($_.Exception.Message)"
+                throw "Failed to create user: $($_.Exception.Message)"
             }
         }
         
-        $userInfos = Print-Users
-        
-        $confirmation = Prompt-Yes-No -Message "Any users you'd like to enable (y/n)?"
-        if ($confirmation.ToLower() -eq "y") {
-            $enableUsers = Get-Comma-Separated-List -category "users"
-            $enableUsers | ForEach-Object {
-                Enable-LocalUser -Name $_
-                Write-Log -Level "SUCCESS" -Message "Enabled user: $_"
-                $userInfos = Print-Users
-            }
+        # Add User 2 to Remote Desktop Users group
+        try {
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user2Name -ErrorAction SilentlyContinue
+            Write-Log -Level "SUCCESS" -Message "Added $user2Name to Remote Desktop Users group"
+        } catch {
+            Write-Log -Level "WARNING" -Message "Could not add $user2Name to Remote Desktop Users group: $($_.Exception.Message)"
         }
         
-        $confirmation = Prompt-Yes-No -Message "Any users you'd like to disable (y/n)?"
-        if ($confirmation.ToLower() -eq "y") {
-            $disableUsers = Get-Comma-Separated-List -category "users"
-            $disableUsers | ForEach-Object {
-                Disable-LocalUser -Name $_
-                Write-Log -Level "SUCCESS" -Message "Disabled user: $_"
-                $userInfos = Print-Users
-            }
-        }
+        # Add to UserArray
+        $script:UserArray += $user2Name
         
+        # Export user permissions to file
         $userOutput = Print-Users
         if ($userOutput -ne $null) {
             $outputText = $userOutput -join "`n`n"
@@ -1178,6 +1168,8 @@ function Add-Competition-Users {
             Write-Host "`nUser permissions have been exported to .\UserPerms.txt" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Exported user permissions to UserPerms.txt"
         }
+        
+        Write-Host "`nCompetition users created successfully!" -ForegroundColor Green
     }
 }
 
@@ -1190,36 +1182,11 @@ function Remove-RDP-Users {
     param()
     
     Invoke-HardeningOperation -OperationName "Remove RDP Users" -ScriptBlock {
-        # Check if users.txt exists and has content
-        if (-not (Test-Path ".\users.txt")) {
-            Write-Host "users.txt not found. Please run 'Get Competition Users' first." -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "users.txt not found for RDP removal"
-            throw "users.txt not found"
-        }
-        
-        # Wait a moment to ensure file is fully written if it was just created
-        Start-Sleep -Milliseconds 500
-        
-        # Read users from file with error handling
-        try {
-            $users = Get-Content ".\users.txt"
-            if ($users.Count -eq 0) {
-                Write-Host "users.txt is empty. Please run 'Get Competition Users' first." -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "users.txt is empty for RDP removal"
-                throw "users.txt is empty"
-            }
-            # Update the global UserArray
-            [string[]]$script:UserArray = $users
-        } catch {
-            Write-Host "Failed to read users.txt: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "Failed to read users.txt: $($_.Exception.Message)"
-            throw "Failed to read users.txt: $($_.Exception.Message)"
-        }
-        
-        if ($script:UserArray.Count -lt 2) {
-            Write-Host "Insufficient users defined. Need at least 2 users in users.txt" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Insufficient users defined for RDP removal"
-            throw "Insufficient users defined"
+        # Check if UserArray has been populated (from Add Competition Users)
+        if ($null -eq $script:UserArray -or $script:UserArray.Count -lt 2) {
+            Write-Host "Competition users not defined. Please run 'Add Competition Users' first." -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "UserArray not populated for RDP removal"
+            throw "Competition users not defined. Run Add Competition Users first."
         }
         
         $usersToRemove = Get-LocalUser -Name * | Where-Object {
@@ -1719,24 +1686,15 @@ function Quick-Harden {
         Initialize-System
         
         # Step 1: Upgrade SMB
-        Write-Host "`nStep 1/9: Upgrading SMB..." -ForegroundColor Cyan
+        Write-Host "`nStep 1/8: Upgrading SMB..." -ForegroundColor Cyan
         Upgrade-SMB
         
         # Step 2: Change Passwords
-        Write-Host "`nStep 2/9: Changing Passwords..." -ForegroundColor Cyan
+        Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
         Change-Passwords
         
-        # Step 3: Get Competition Users
-        Write-Host "`nStep 3/9: Getting Competition Users..." -ForegroundColor Cyan
-        if (-not (Test-Path .\users.txt)) { 
-            Write-Host "  [WARNING] users.txt not found. Skipping - please create users.txt manually before running Add Competition Users" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "users.txt not found - Get Competition Users requires manual execution"
-        } else {
-            Write-Host "  [INFO] users.txt already exists, skipping user input" -ForegroundColor Green
-        }
-        
-        # Step 4: Configure Firewall (uses FirewallPorts parameter or default)
-        Write-Host "`nStep 4/9: Configuring Firewall..." -ForegroundColor Cyan
+        # Step 3: Configure Firewall (uses FirewallPorts parameter or default)
+        Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
         # Use FirewallPorts parameter if provided, otherwise use default (port 80)
         $portArray = $FirewallPorts
         if ($portArray.Count -eq 0) {
@@ -1783,28 +1741,28 @@ function Quick-Harden {
             Write-Log -Level "ERROR" -Message "Quick harden firewall configuration failed: $($_.Exception.Message)"
         }
         
-        # Step 5: Enable Windows Defender
-        Write-Host "`nStep 5/9: Enabling Windows Defender..." -ForegroundColor Cyan
+        # Step 4: Enable Windows Defender
+        Write-Host "`nStep 4/8: Enabling Windows Defender..." -ForegroundColor Cyan
         Enable-Windows-Defender
         
-        # Step 6: Disable unnecessary services
-        Write-Host "`nStep 6/9: Disabling Unnecessary Services..." -ForegroundColor Cyan
+        # Step 5: Disable unnecessary services
+        Write-Host "`nStep 5/8: Disabling Unnecessary Services..." -ForegroundColor Cyan
         Disable-Unnecessary-Services
         
-        # Step 7: Add Competition Users (USER INPUT REQUIRED)
-        Write-Host "`nStep 7/9: Adding Competition Users..." -ForegroundColor Cyan
+        # Step 6: Add Competition Users (USER INPUT REQUIRED)
+        Write-Host "`nStep 6/8: Adding Competition Users..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for usernames/passwords" -ForegroundColor Yellow
         Add-Competition-Users
         
-        # Step 8: Configure Splunk (USER INPUT REQUIRED)
-        Write-Host "`nStep 8/9: Configuring Splunk..." -ForegroundColor Cyan
+        # Step 7: Configure Splunk (USER INPUT REQUIRED)
+        Write-Host "`nStep 7/8: Configuring Splunk..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for Splunk configuration" -ForegroundColor Yellow
         $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
         $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
         Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
         
-        # Step 9: Set Execution Policy to Restricted
-        Write-Host "`nStep 9/9: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
+        # Step 8: Set Execution Policy to Restricted
+        Write-Host "`nStep 8/8: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
         try {
             Set-ExecutionPolicy Restricted -Scope Process -Force
             Write-Host "Execution Policy set to Restricted successfully" -ForegroundColor Green
@@ -2261,20 +2219,19 @@ function Show-Main-Menu {
     Write-Host "  0) Print Execution Summary"
     Write-Host "  A) Initialize Context (download files, set variables)"
     Write-Host "  1) Quick Harden (essential steps only)"
-    Write-Host "  2) Get Competition Users" #3
-    Write-Host "  3) Change Passwords" #2 Passwords Changes | 4 word passphrase from word list -> set all passwords to username + passphrase + print passphrase | make seperate script for this to rederive passwords. List of users + secret -> csv of user, password
-    Write-Host "  4) Enable Windows Defender" #5
-    Write-Host "  5) Add Competition Users" #8
-    Write-Host "  6) Remove RDP Users (harden access)"
-    Write-Host "  7) Configure Firewall" #4
-    Write-Host "  8) Disable Unnecessary Services" #7
-    Write-Host "  9) Enable Advanced Auditing + Firewall Logging"
-    Write-Host " 10) Configure Splunk" #9
-    Write-Host " 11) Install EternalBlue Patch"
-    Write-Host " 12) Upgrade SMB (enable v2/3, disable v1)" #1
-    Write-Host " 13) Patch Mimikatz (WDigest)"
-    Write-Host " 14) Run Windows Updates"
-    Write-Host " 15) Set Execution Policy to Restricted" #10
+    Write-Host "  2) Change Passwords" #2 Passwords Changes | 4 word passphrase from word list -> set all passwords to username + passphrase + print passphrase | make seperate script for this to rederive passwords. List of users + secret -> csv of user, password
+    Write-Host "  3) Enable Windows Defender" #5
+    Write-Host "  4) Add Competition Users" #8
+    Write-Host "  5) Remove RDP Users (harden access)"
+    Write-Host "  6) Configure Firewall" #4
+    Write-Host "  7) Disable Unnecessary Services" #7
+    Write-Host "  8) Enable Advanced Auditing + Firewall Logging"
+    Write-Host "  9) Configure Splunk" #9
+    Write-Host " 10) Install EternalBlue Patch"
+    Write-Host " 11) Upgrade SMB (enable v2/3, disable v1)" #1
+    Write-Host " 12) Patch Mimikatz (WDigest)"
+    Write-Host " 13) Run Windows Updates"
+    Write-Host " 14) Set Execution Policy to Restricted" #10
 }
 
 <#
@@ -2474,14 +2431,13 @@ while ($true) {
             '0' { Print-Log }
             'A' { Initialize-System }
             '1' { Write-Host "`n***Quick Hardening (Essential Steps Only)...***" -ForegroundColor Magenta; Quick-Harden }
-            '2' { Write-Host "`n***Getting Competition Users...***" -ForegroundColor Magenta; GetCompetitionUsers }
-            '3' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords }
-            '4' { Write-Host "`n***Enabling Windows Defender...***" -ForegroundColor Magenta; Enable-Windows-Defender }
-            '5' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
-            '6' { Write-Host "`n***Removing users from RDP group (except first two competition users)...***" -ForegroundColor Magenta; Remove-RDP-Users }
-            '7' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
-            '8' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
-            '9' { 
+            '2' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords }
+            '3' { Write-Host "`n***Enabling Windows Defender...***" -ForegroundColor Magenta; Enable-Windows-Defender }
+            '4' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
+            '5' { Write-Host "`n***Removing users from RDP group (except first two competition users)...***" -ForegroundColor Magenta; Remove-RDP-Users }
+            '6' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
+            '7' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
+            '8' { 
                 Write-Host "`n***Enabling Advanced Auditing and Firewall logging...***" -ForegroundColor Magenta
                 if (Test-Path ".\advancedAuditing.ps1") {
                     try {
@@ -2505,17 +2461,17 @@ while ($true) {
                     Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
                 }
             }
-            '10' {
+            '9' {
                 Write-Host "`n***Configuring Splunk...***" -ForegroundColor Magenta
                 $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
                 $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
                 Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
             }
-            '11' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
-            '12' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
-            '13' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
-            '14' { Write-Host "`n***Running Windows Updates...***" -ForegroundColor Magenta; Run-Windows-Updates }
-            '15' { 
+            '10' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
+            '11' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
+            '12' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
+            '13' { Write-Host "`n***Running Windows Updates...***" -ForegroundColor Magenta; Run-Windows-Updates }
+            '14' { 
                 Write-Host "`n***Setting Execution Policy back to Restricted...***" -ForegroundColor Magenta
                 try {
                     Set-ExecutionPolicy Restricted -Scope Process -Force
