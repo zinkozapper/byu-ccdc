@@ -1069,23 +1069,23 @@ function Add-Competition-Users {
             
             # Validate username is not empty
             if ([string]::IsNullOrWhiteSpace($Username)) {
-                Write-Host "✗ Failed to create user $UserNumber: Username cannot be empty" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User $UserNumber username is empty"
+                Write-Host "Failed to create user ${Username}: Username cannot be empty" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
                 return $false
             }
             
             # Check if user already exists
             $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
             if ($existingUser) {
-                Write-Host "✓ User $Username already exists (skipping creation)" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "User '$Username' already exists"
+                Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "User ${Username} already exists"
                 $userCreated = $true
             } else {
                 # Validate password is not empty
                 $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
                 if ($passwordLength -eq 0) {
-                    Write-Host "✗ Failed to create user $Username: Password cannot be empty" -ForegroundColor Red
-                    Write-Log -Level "ERROR" -Message "User $Username password is empty"
+                    Write-Host "Failed to create user ${Username}: Password cannot be empty" -ForegroundColor Red
+                    Write-Log -Level "ERROR" -Message "User ${Username} password is empty"
                     return $false
                 }
                 
@@ -1102,12 +1102,12 @@ function Add-Competition-Users {
                     $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
                     
                     if ($verifyUser) {
-                        Write-Host "✓ User $Username created successfully" -ForegroundColor Green
-                        Write-Log -Level "SUCCESS" -Message "Created user: $Username"
+                        Write-Host "✓ User ${Username} created successfully" -ForegroundColor Green
+                        Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
                         $userCreated = $true
                     } else {
-                        Write-Host "✗ Failed to create user $Username: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
-                        Write-Log -Level "ERROR" -Message "User creation verification failed for: $Username"
+                        Write-Host "Failed to create user ${Username}: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
+                        Write-Log -Level "ERROR" -Message "User creation verification failed for: ${Username}"
                         return $false
                     }
                 } catch {
@@ -1115,18 +1115,18 @@ function Add-Competition-Users {
                     
                     # Provide more specific error messages for common failures
                     if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
-                        Write-Host "✗ Failed to create user $Username: Username already exists" -ForegroundColor Red
+                        Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
                     } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
-                        Write-Host "✗ Failed to create user $Username: Password does not meet complexity requirements" -ForegroundColor Red
+                        Write-Host "Failed to create user ${Username}: Password does not meet complexity requirements" -ForegroundColor Red
                     } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
-                        Write-Host "✗ Failed to create user $Username: Insufficient permissions to create user" -ForegroundColor Red
+                        Write-Host "Failed to create user ${Username}: Insufficient permissions to create user" -ForegroundColor Red
                     } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
-                        Write-Host "✗ Failed to create user $Username: Invalid username format" -ForegroundColor Red
+                        Write-Host "Failed to create user ${Username}: Invalid username format" -ForegroundColor Red
                     } else {
-                        Write-Host "✗ Failed to create user $Username: $errorMessage" -ForegroundColor Red
+                        Write-Host "Failed to create user ${Username}: $errorMessage" -ForegroundColor Red
                     }
                     
-                    Write-Log -Level "ERROR" -Message "Failed to create user '$Username': $errorMessage"
+                    Write-Log -Level "ERROR" -Message "Failed to create user '${Username}': $errorMessage"
                     return $false
                 }
             }
@@ -1137,13 +1137,13 @@ function Add-Competition-Users {
                     if ($IsFirstUser) {
                         Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
                         Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                        Write-Log -Level "SUCCESS" -Message "Added $Username to Administrators and Remote Desktop Users groups"
+                        Write-Log -Level "SUCCESS" -Message "Added ${Username} to Administrators and Remote Desktop Users groups"
                     } else {
                         Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                        Write-Log -Level "SUCCESS" -Message "Added $Username to Remote Desktop Users group"
+                        Write-Log -Level "SUCCESS" -Message "Added ${Username} to Remote Desktop Users group"
                     }
                 } catch {
-                    Write-Log -Level "WARNING" -Message "Could not add $Username to groups: $($_.Exception.Message)"
+                    Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
                 }
                 
                 # Add to UserArray
