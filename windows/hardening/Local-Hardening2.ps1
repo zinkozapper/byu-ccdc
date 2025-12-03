@@ -1066,7 +1066,7 @@ function New-CompetitionUser {
         Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
         return $false
     }
-    
+            
     # Check if user already exists
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
     if ($existingUser) {
@@ -1095,7 +1095,7 @@ function New-CompetitionUser {
             $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
             
             if ($verifyUser) {
-                Write-Host "✓ User ${Username} created successfully" -ForegroundColor Green
+                Write-Host "User ${Username} created successfully" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
                 $userCreated = $true
             } else {
@@ -1146,8 +1146,6 @@ function New-CompetitionUser {
     
     return $false
 }
-
----
 
 ## 2. Main Function Definition (Uses the Helper Function)
 
