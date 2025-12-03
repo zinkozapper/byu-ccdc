@@ -1049,6 +1049,7 @@ function Get-Set-Password {
 ## Helper Function for Competition User Creation
 # This function must be defined outside the Invoke-HardeningOperation script block
 # and preferably outside the main function itself for proper scope.
+## 1. Helper Function Definition (MUST be outside the main script block)
 function New-CompetitionUser {
     param(
         [string]$Username,
@@ -1067,7 +1068,6 @@ function New-CompetitionUser {
     }
     
     # Check if user already exists
-    # NOTE: You'll need to define Get-LocalUser, Write-Host, and Write-Log if they aren't standard Cmdlets or defined elsewhere.
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
     if ($existingUser) {
         Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
@@ -1091,7 +1091,7 @@ function New-CompetitionUser {
             New-LocalUser @splat -ErrorAction Stop
             
             # Verify user was actually created
-            Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
+            Start-Sleep -Milliseconds 500
             $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
             
             if ($verifyUser) {
@@ -1106,7 +1106,7 @@ function New-CompetitionUser {
         } catch {
             $errorMessage = $_.Exception.Message
             
-            # Provide more specific error messages for common failures
+            # ... (Error handling logic remains the same) ...
             if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
                 Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
             } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
@@ -1124,7 +1124,7 @@ function New-CompetitionUser {
         }
     }
     
-    # Add user to appropriate groups if creation succeeded or user already existed
+    # Add user to appropriate groups
     if ($userCreated) {
         try {
             if ($IsFirstUser) {
@@ -1139,12 +1139,71 @@ function New-CompetitionUser {
             Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
         }
         
-        # Add to UserArray (requires $script:UserArray be defined)
+        # Add to UserArray
         $script:UserArray += $Username
         return $true
     }
     
     return $false
+}
+
+---
+
+## 2. Main Function Definition (Uses the Helper Function)
+
+function Add-Competition-Users {
+    [CmdletBinding()]
+    param()
+    
+    Invoke-HardeningOperation -OperationName "Add Competition Users" -ScriptBlock {
+        # Initialize array to store the 2 competition users and success counter
+        [string[]]$script:UserArray = @()
+        $successCount = 0
+        $totalUsers = 2
+        
+        # NOTE: New-CompetitionUser is now callable here because it was defined previously.
+        
+        # Prompt for and create User 1
+        $user1Name = Read-Host "Enter username for user 1"
+        $user1Password = Read-Host -AsSecureString "Enter password for user 1"
+        
+        # Call the external function
+        if (New-CompetitionUser -Username $user1Name -Password $user1Password -UserNumber 1 -IsFirstUser $true) {
+            $successCount++
+        }
+        
+        # Prompt for and create User 2
+        Write-Host ""
+        $user2Name = Read-Host "Enter username for user 2"
+        $user2Password = Read-Host -AsSecureString "Enter password for user 2"
+        
+        # Call the external function
+        if (New-CompetitionUser -Username $user2Name -Password $user2Password -UserNumber 2 -IsFirstUser $false) {
+            $successCount++
+        }
+        
+        # Export user permissions to file
+        if ($script:UserArray.Count -gt 0) {
+            # NOTE: Print-Users must also be defined externally or its definition must be removed.
+            $userOutput = Print-Users
+            if ($userOutput -ne $null) {
+                $outputText = $userOutput -join "`n`n"
+                $outputText | Out-File -FilePath "UserPerms.txt" -Encoding UTF8
+                Write-Host "`nUser permissions have been exported to .\UserPerms.txt" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Exported user permissions to UserPerms.txt"
+            }
+        }
+        
+        # Summary
+        Write-Host ""
+        if ($successCount -eq $totalUsers) {
+            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "All $totalUsers users created successfully"
+        } else {
+            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "Only $successCount out of $totalUsers users were created successfully"
+        }
+    }
 }
 
 <#
