@@ -1046,152 +1046,105 @@ function Get-Set-Password {
     Adds competition-specific users with certain privileges.
     Prompts user directly for 2 users (username and password for each).
 #>
-function Add-Competition-Users {
-    [CmdletBinding()]
-    param()
+## Helper Function for Competition User Creation
+# This function must be defined outside the Invoke-HardeningOperation script block
+# and preferably outside the main function itself for proper scope.
+function New-CompetitionUser {
+    param(
+        [string]$Username,
+        [System.Security.SecureString]$Password,
+        [int]$UserNumber,
+        [bool]$IsFirstUser = $false
+    )
     
-    Invoke-HardeningOperation -OperationName "Add Competition Users" -ScriptBlock {
-        # Initialize array to store the 2 competition users and success counter
-        [string[]]$script:UserArray = @()
-        $successCount = 0
-        $totalUsers = 2
-        
-        # Helper function to create a user with validation
-        function New-CompetitionUser {
-            param(
-                [string]$Username,
-                [System.Security.SecureString]$Password,
-                [int]$UserNumber,
-                [bool]$IsFirstUser = $false
-            )
-            
-            $userCreated = $false
-            
-            # Validate username is not empty
-            if ([string]::IsNullOrWhiteSpace($Username)) {
-                Write-Host "Failed to create user ${Username}: Username cannot be empty" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
-                return $false
-            }
-            
-            # Check if user already exists
-            $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-            if ($existingUser) {
-                Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "User ${Username} already exists"
-                $userCreated = $true
-            } else {
-                # Validate password is not empty
-                $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
-                if ($passwordLength -eq 0) {
-                    Write-Host "Failed to create user ${Username}: Password cannot be empty" -ForegroundColor Red
-                    Write-Log -Level "ERROR" -Message "User ${Username} password is empty"
-                    return $false
-                }
-                
-                # Attempt to create user
-                try {
-                    $splat = @{
-                        Name = $Username
-                        Password = $Password
-                    }
-                    New-LocalUser @splat -ErrorAction Stop
-                    
-                    # Verify user was actually created
-                    Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
-                    $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-                    
-                    if ($verifyUser) {
-                        Write-Host "✓ User ${Username} created successfully" -ForegroundColor Green
-                        Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
-                        $userCreated = $true
-                    } else {
-                        Write-Host "Failed to create user ${Username}: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
-                        Write-Log -Level "ERROR" -Message "User creation verification failed for: ${Username}"
-                        return $false
-                    }
-                } catch {
-                    $errorMessage = $_.Exception.Message
-                    
-                    # Provide more specific error messages for common failures
-                    if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
-                        Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
-                    } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
-                        Write-Host "Failed to create user ${Username}: Password does not meet complexity requirements" -ForegroundColor Red
-                    } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
-                        Write-Host "Failed to create user ${Username}: Insufficient permissions to create user" -ForegroundColor Red
-                    } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
-                        Write-Host "Failed to create user ${Username}: Invalid username format" -ForegroundColor Red
-                    } else {
-                        Write-Host "Failed to create user ${Username}: $errorMessage" -ForegroundColor Red
-                    }
-                    
-                    Write-Log -Level "ERROR" -Message "Failed to create user '${Username}': $errorMessage"
-                    return $false
-                }
-            }
-            
-            # Add user to appropriate groups if creation succeeded or user already existed
-            if ($userCreated) {
-                try {
-                    if ($IsFirstUser) {
-                        Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
-                        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                        Write-Log -Level "SUCCESS" -Message "Added ${Username} to Administrators and Remote Desktop Users groups"
-                    } else {
-                        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                        Write-Log -Level "SUCCESS" -Message "Added ${Username} to Remote Desktop Users group"
-                    }
-                } catch {
-                    Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
-                }
-                
-                # Add to UserArray
-                $script:UserArray += $Username
-                return $true
-            }
-            
+    $userCreated = $false
+    
+    # Validate username is not empty
+    if ([string]::IsNullOrWhiteSpace($Username)) {
+        Write-Host "Failed to create user ${Username}: Username cannot be empty" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
+        return $false
+    }
+    
+    # Check if user already exists
+    # NOTE: You'll need to define Get-LocalUser, Write-Host, and Write-Log if they aren't standard Cmdlets or defined elsewhere.
+    $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
+    if ($existingUser) {
+        Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
+        Write-Log -Level "WARNING" -Message "User ${Username} already exists"
+        $userCreated = $true
+    } else {
+        # Validate password is not empty
+        $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
+        if ($passwordLength -eq 0) {
+            Write-Host "Failed to create user ${Username}: Password cannot be empty" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "User ${Username} password is empty"
             return $false
         }
         
-        # Prompt for and create User 1
-        $user1Name = Read-Host "Enter username for user 1"
-        $user1Password = Read-Host -AsSecureString "Enter password for user 1"
-        
-        if (New-CompetitionUser -Username $user1Name -Password $user1Password -UserNumber 1 -IsFirstUser $true) {
-            $successCount++
-        }
-        
-        # Prompt for and create User 2
-        Write-Host ""
-        $user2Name = Read-Host "Enter username for user 2"
-        $user2Password = Read-Host -AsSecureString "Enter password for user 2"
-        
-        if (New-CompetitionUser -Username $user2Name -Password $user2Password -UserNumber 2 -IsFirstUser $false) {
-            $successCount++
-        }
-        
-        # Export user permissions to file
-        if ($script:UserArray.Count -gt 0) {
-            $userOutput = Print-Users
-            if ($userOutput -ne $null) {
-                $outputText = $userOutput -join "`n`n"
-                $outputText | Out-File -FilePath "UserPerms.txt" -Encoding UTF8
-                Write-Host "`nUser permissions have been exported to .\UserPerms.txt" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Exported user permissions to UserPerms.txt"
+        # Attempt to create user
+        try {
+            $splat = @{
+                Name = $Username
+                Password = $Password
             }
-        }
-        
-        # Summary
-        Write-Host ""
-        if ($successCount -eq $totalUsers) {
-            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "All $totalUsers users created successfully"
-        } else {
-            Write-Host "$successCount/$totalUsers users created successfully" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Only $successCount out of $totalUsers users were created successfully"
+            New-LocalUser @splat -ErrorAction Stop
+            
+            # Verify user was actually created
+            Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
+            $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
+            
+            if ($verifyUser) {
+                Write-Host "✓ User ${Username} created successfully" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
+                $userCreated = $true
+            } else {
+                Write-Host "Failed to create user ${Username}: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User creation verification failed for: ${Username}"
+                return $false
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            
+            # Provide more specific error messages for common failures
+            if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
+                Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
+            } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
+                Write-Host "Failed to create user ${Username}: Password does not meet complexity requirements" -ForegroundColor Red
+            } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
+                Write-Host "Failed to create user ${Username}: Insufficient permissions to create user" -ForegroundColor Red
+            } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
+                Write-Host "Failed to create user ${Username}: Invalid username format" -ForegroundColor Red
+            } else {
+                Write-Host "Failed to create user ${Username}: $errorMessage" -ForegroundColor Red
+            }
+            
+            Write-Log -Level "ERROR" -Message "Failed to create user '${Username}': $errorMessage"
+            return $false
         }
     }
+    
+    # Add user to appropriate groups if creation succeeded or user already existed
+    if ($userCreated) {
+        try {
+            if ($IsFirstUser) {
+                Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
+                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
+                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Administrators and Remote Desktop Users groups"
+            } else {
+                Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
+                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Remote Desktop Users group"
+            }
+        } catch {
+            Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
+        }
+        
+        # Add to UserArray (requires $script:UserArray be defined)
+        $script:UserArray += $Username
+        return $true
+    }
+    
+    return $false
 }
 
 <#
