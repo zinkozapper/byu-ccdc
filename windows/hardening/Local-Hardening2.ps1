@@ -327,8 +327,12 @@ function Write-Log {
     Updates the operation tracking log.
 #>
 function Update-Log {
+    [CmdletBinding()]
     param(
+        [Parameter(Mandatory=$true)]
         [string]$key,
+        
+        [Parameter(Mandatory=$true)]
         [string]$value
     )
     $script:log[$key] = $value
@@ -339,8 +343,11 @@ function Update-Log {
     Initializes the function execution log.
 #>
 function Initialize-Log {
+    [CmdletBinding()]
+    param()
+    
     foreach ($func in $functionNames) {
-        Update-Log $func "Not executed"
+        Update-Log -key $func -value "Not executed"
     }
 }
 
@@ -349,6 +356,9 @@ function Initialize-Log {
     Prints the execution summary log.
 #>
 function Print-Log {
+    [CmdletBinding()]
+    param()
+    
     Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
     Write-Host "### Script Execution Summary ###" -ForegroundColor Green
     Write-Host ("=" * 60) -ForegroundColor Cyan
@@ -554,6 +564,7 @@ function Invoke-HardeningOperation {
     }
 }
 
+
 <#
 .SYNOPSIS
     Validates prerequisites before executing an operation.
@@ -753,7 +764,13 @@ function Test-Prerequisites {
 
 #endregion
 
-#region Core Hardening Functions
+#region Utility Functions
+
+<#
+.SYNOPSIS
+    Helper function to create a competition user with validation.
+    Verifies user creation and handles common error scenarios.
+#>
 
 <#
 .SYNOPSIS
@@ -1043,42 +1060,48 @@ function Get-Set-Password {
 
 <#
 .SYNOPSIS
-    Adds competition-specific users with certain privileges.
-    Prompts user directly for 2 users (username and password for each).
+    Helper function to create a competition user with validation.
+    Verifies user creation and handles common error scenarios.
 #>
-## Helper Function for Competition User Creation
-# This function must be defined outside the Invoke-HardeningOperation script block
-# and preferably outside the main function itself for proper scope.
-## 1. Helper Function Definition (MUST be outside the main script block)
 function New-CompetitionUser {
+    [CmdletBinding()]
     param(
+        [Parameter(Mandatory=$true)]
         [string]$Username,
+        
+        [Parameter(Mandatory=$true)]
         [System.Security.SecureString]$Password,
+        
+        [Parameter(Mandatory=$true)]
         [int]$UserNumber,
+        
+        [Parameter(Mandatory=$false)]
         [bool]$IsFirstUser = $false
     )
     
     $userCreated = $false
     
+    $userCreated = $false
+    
     # Validate username is not empty
     if ([string]::IsNullOrWhiteSpace($Username)) {
-        Write-Host "Failed to create user ${Username}: Username cannot be empty" -ForegroundColor Red
-        Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
+        Write-Host "✗ Failed to create user $UserNumber: Username cannot be empty" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "User $UserNumber username is empty"
         return $false
     }
-            
+    
     # Check if user already exists
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
     if ($existingUser) {
-        Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
-        Write-Log -Level "WARNING" -Message "User ${Username} already exists"
+        Write-Host "✓ User $Username already exists (skipping creation)" -ForegroundColor Yellow
+        Write-Log -Level "WARNING" -Message "User '$Username' already exists"
         $userCreated = $true
     } else {
         # Validate password is not empty
         $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
         if ($passwordLength -eq 0) {
-            Write-Host "Failed to create user ${Username}: Password cannot be empty" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "User ${Username} password is empty"
+            Write-Host "✗ Failed to create user $Username: Password cannot be empty" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "User $Username password is empty"
             return $false
         }
         
@@ -1091,35 +1114,35 @@ function New-CompetitionUser {
             New-LocalUser @splat -ErrorAction Stop
             
             # Verify user was actually created
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
             $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
             
             if ($verifyUser) {
-                Write-Host "User ${Username} created successfully" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
+                Write-Host "✓ User $Username created successfully" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Created user: $Username"
                 $userCreated = $true
             } else {
-                Write-Host "Failed to create user ${Username}: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User creation verification failed for: ${Username}"
+                Write-Host "✗ Failed to create user $Username: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User creation verification failed for: $Username"
                 return $false
             }
         } catch {
             $errorMessage = $_.Exception.Message
             
-            # ... (Error handling logic remains the same) ...
+            # Provide more specific error messages for common failures
             if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
-                Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
+                Write-Host "✗ Failed to create user $Username: Username already exists" -ForegroundColor Red
             } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
-                Write-Host "Failed to create user ${Username}: Password does not meet complexity requirements" -ForegroundColor Red
+                Write-Host "✗ Failed to create user $Username: Password does not meet complexity requirements" -ForegroundColor Red
             } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
-                Write-Host "Failed to create user ${Username}: Insufficient permissions to create user" -ForegroundColor Red
+                Write-Host "✗ Failed to create user $Username: Insufficient permissions to create user" -ForegroundColor Red
             } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
-                Write-Host "Failed to create user ${Username}: Invalid username format" -ForegroundColor Red
+                Write-Host "✗ Failed to create user $Username: Invalid username format" -ForegroundColor Red
             } else {
-                Write-Host "Failed to create user ${Username}: $errorMessage" -ForegroundColor Red
+                Write-Host "✗ Failed to create user $Username: $errorMessage" -ForegroundColor Red
             }
             
-            Write-Log -Level "ERROR" -Message "Failed to create user '${Username}': $errorMessage"
+            Write-Log -Level "ERROR" -Message "Failed to create user '$Username': $errorMessage"
             return $false
         }
     }
@@ -1130,13 +1153,13 @@ function New-CompetitionUser {
             if ($IsFirstUser) {
                 Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
                 Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Administrators and Remote Desktop Users groups"
+                Write-Log -Level "SUCCESS" -Message "Added $Username to Administrators and Remote Desktop Users groups"
             } else {
                 Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Remote Desktop Users group"
+                Write-Log -Level "SUCCESS" -Message "Added $Username to Remote Desktop Users group"
             }
         } catch {
-            Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
+            Write-Log -Level "WARNING" -Message "Could not add $Username to groups: $($_.Exception.Message)"
         }
         
         # Add to UserArray
@@ -1147,8 +1170,11 @@ function New-CompetitionUser {
     return $false
 }
 
-## 2. Main Function Definition (Uses the Helper Function)
-
+<#
+.SYNOPSIS
+    Adds competition-specific users with certain privileges.
+    Prompts user directly for 2 users (username and password for each).
+#>
 function Add-Competition-Users {
     [CmdletBinding()]
     param()
@@ -1158,8 +1184,6 @@ function Add-Competition-Users {
         [string[]]$script:UserArray = @()
         $successCount = 0
         $totalUsers = 2
-        
-        # NOTE: New-CompetitionUser is now callable here because it was defined previously.
         
         # Prompt for and create User 1
         $user1Name = Read-Host "Enter username for user 1"
@@ -1182,7 +1206,6 @@ function Add-Competition-Users {
         
         # Export user permissions to file
         if ($script:UserArray.Count -gt 0) {
-            # NOTE: Print-Users must also be defined externally or its definition must be removed.
             $userOutput = Print-Users
             if ($userOutput -ne $null) {
                 $outputText = $userOutput -join "`n`n"
@@ -1343,6 +1366,10 @@ function Get-Comma-Separated-List {
         return @()
     }
 }
+
+#endregion
+
+#region Core Hardening Functions
 
 <#
 .SYNOPSIS
@@ -2236,7 +2263,14 @@ function Run-Windows-Updates {
 .SYNOPSIS
     Displays the main menu.
 #>
+<#
+.SYNOPSIS
+    Displays the main menu for script operations.
+#>
 function Show-Main-Menu {
+    [CmdletBinding()]
+    param()
+    
     Clear-Host
     Write-Host "`n==== Local Windows Hardening Menu ====" -ForegroundColor Green
     Write-Host "Prerequisites:"
