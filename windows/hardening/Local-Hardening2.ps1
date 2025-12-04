@@ -94,7 +94,7 @@ $script:EternalBlueStatus = "Unknown"
 # Function names for tracking
 $functionNames = @(
     "Initialize Context", "Change Passwords", 
-    "Quick Harden", "Add Competition Users", "Remove RDP Users", "Configure Firewall", 
+    "Quick Harden", "Add Competition Users", "Remove RDP Users", "Add RDP Users", "Configure Firewall", 
     "Disable Unnecessary Services", "Enable Advanced Auditing", "Configure Splunk", 
     "EternalBlue Mitigated", "Upgrade SMB", "Patch Mimikatz", 
     "Set Execution Policy"
@@ -1104,28 +1104,120 @@ function Remove-RDP-Users {
     param()
     
     Invoke-HardeningOperation -OperationName "Remove RDP Users" -ScriptBlock {
-        # Check if UserArray has been populated (from Add Competition Users)
-        if ($null -eq $script:UserArray -or $script:UserArray.Count -lt 2) {
-            Write-Host "Competition users not defined. Please run 'Add Competition Users' first." -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "UserArray not populated for RDP removal"
-            throw "Competition users not defined. Run Add Competition Users first."
-        }
+        Write-Host "Removing all users from Remote Desktop Users group..." -ForegroundColor Cyan
         
-        $usersToRemove = Get-LocalUser -Name * | Where-Object {
-            $_.name -ne $script:UserArray[0] -and $_.name -ne $script:UserArray[1]
+        try {
+            # Get all members of the Remote Desktop Users group
+            $rdpGroupMembers = Get-LocalGroupMember -Name "Remote Desktop Users" -ErrorAction SilentlyContinue
+            
+            if ($null -eq $rdpGroupMembers -or $rdpGroupMembers.Count -eq 0) {
+                Write-Host "  [INFO] Remote Desktop Users group is already empty" -ForegroundColor Yellow
+                Write-Log -Level "INFO" -Message "Remote Desktop Users group is already empty"
+            } else {
+                $removedCount = 0
+                foreach ($member in $rdpGroupMembers) {
+                    try {
+                        # Extract username from the member object (format: "DOMAIN\Username" or "COMPUTER\Username")
+                        $username = $member.Name.Split('\')[-1]
+                        Remove-LocalGroupMember -Name "Remote Desktop Users" -Member $member -Confirm:$false -ErrorAction Stop
+                        Write-Host "  [SUCCESS] Removed $username from Remote Desktop Users group" -ForegroundColor Green
+                        Write-Log -Level "SUCCESS" -Message "Removed $username from Remote Desktop Users group"
+                        $removedCount++
+                    } catch {
+                        Write-Host "  [WARNING] Could not remove $($member.Name) from Remote Desktop Users group: $($_.Exception.Message)" -ForegroundColor Yellow
+                        Write-Log -Level "WARNING" -Message "Could not remove $($member.Name) from Remote Desktop Users group: $($_.Exception.Message)"
+                    }
+                }
+                Write-Host "  [INFO] Removed $removedCount user(s) from Remote Desktop Users group" -ForegroundColor Cyan
+            }
+            
+            Write-Host "RDP users removed successfully - Remote Desktop Users group has been reset" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "RDP users removal completed - Remote Desktop Users group reset"
+        } catch {
+            Write-Host "  [ERROR] Failed to remove RDP users: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "Failed to remove RDP users: $($_.Exception.Message)"
+            throw
         }
+    }
+}
+
+<#
+.SYNOPSIS
+    Interactively adds users to the Remote Desktop Users group.
+    
+.DESCRIPTION
+    Prompts the user for the number of users to add, then iteratively prompts for each username
+    and adds them to the Remote Desktop Users group with error handling.
+#>
+function Add-RDP-Users {
+    [CmdletBinding()]
+    param()
+    
+    Invoke-HardeningOperation -OperationName "Add RDP Users" -ScriptBlock {
+        Write-Host "`n=== Add Users to Remote Desktop Users Group ===" -ForegroundColor Cyan
         
-        foreach ($user in $usersToRemove) {
+        # Prompt for the number of users to add
+        $userCount = 0
+        while ($true) {
             try {
-                Remove-LocalGroupMember -Name "Remote Desktop Users" -Member $user -Confirm:$false
-                Write-Log -Level "SUCCESS" -Message "Removed $($user.Name) from Remote Desktop Users group"
+                $userCountInput = Read-Host "Enter the number of users you wish to add to the Remote Desktop Users group"
+                $userCount = [int]$userCountInput
+                if ($userCount -gt 0) {
+                    break
+                } else {
+                    Write-Host "  [ERROR] Please enter a positive number greater than 0." -ForegroundColor Red
+                }
             } catch {
-                # User might not be in the group, which is fine
-                Write-Verbose "User $($user.Name) not in Remote Desktop Users group or already removed"
+                Write-Host "  [ERROR] Invalid input. Please enter a valid number." -ForegroundColor Red
             }
         }
         
-        Write-Host "RDP users removed successfully" -ForegroundColor Green
+        Write-Host "`nYou will now be prompted to enter $userCount username(s)." -ForegroundColor Yellow
+        Write-Host ""
+        
+        $successCount = 0
+        $failedCount = 0
+        
+        # Loop to prompt for each username
+        for ($i = 1; $i -le $userCount; $i++) {
+            $username = Read-Host "Enter username #$i"
+            
+            # Skip empty usernames
+            if ([string]::IsNullOrWhiteSpace($username)) {
+                Write-Host "  [WARNING] Username #$i was empty, skipping..." -ForegroundColor Yellow
+                $failedCount++
+                continue
+            }
+            
+            # Try to add the user to the Remote Desktop Users group
+            try {
+                Add-LocalGroupMember -Name "Remote Desktop Users" -Member $username -ErrorAction Stop
+                Write-Host "  [SUCCESS] Added user '$username' to Remote Desktop Users group" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Added user '$username' to Remote Desktop Users group"
+                $successCount++
+            } catch {
+                $errorMessage = $_.Exception.Message
+                Write-Host "  [ERROR] Could not add user '$username' to Remote Desktop Users group: $errorMessage" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Could not add user '$username' to Remote Desktop Users group: $errorMessage"
+                $failedCount++
+                
+                # Provide helpful error messages
+                if ($errorMessage -like "*not found*" -or $errorMessage -like "*does not exist*") {
+                    Write-Host "    [INFO] The user '$username' does not exist on the local system or domain." -ForegroundColor Yellow
+                } elseif ($errorMessage -like "*already*" -or $errorMessage -like "*member*") {
+                    Write-Host "    [INFO] The user '$username' is already a member of the Remote Desktop Users group." -ForegroundColor Yellow
+                }
+            }
+        }
+        
+        # Summary
+        Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+        Write-Host "  Successfully added: $successCount user(s)" -ForegroundColor Green
+        if ($failedCount -gt 0) {
+            Write-Host "  Failed to add: $failedCount user(s)" -ForegroundColor Red
+        }
+        Write-Host "`nRDP user addition process completed." -ForegroundColor Green
+        Write-Log -Level "SUCCESS" -Message "Add RDP Users completed: $successCount succeeded, $failedCount failed"
     }
 }
 
@@ -1802,15 +1894,16 @@ function Show-Main-Menu {
     Write-Host "  1) Quick Harden (essential steps only)"
     Write-Host "  2) Change Passwords" #2 Passwords Changes | 4 word passphrase from word list -> set all passwords to username + passphrase + print passphrase | make seperate script for this to rederive passwords. List of users + secret -> csv of user, password
     Write-Host "  3) Add Competition Users" #8
-    Write-Host "  4) Remove RDP Users (harden access)"
-    Write-Host "  5) Configure Firewall" #4
-    Write-Host "  6) Disable Unnecessary Services" #7
-    Write-Host "  7) Enable Advanced Auditing + Firewall Logging"
-    Write-Host "  8) Configure Splunk" #9
-    Write-Host "  9) Install EternalBlue Patch"
-    Write-Host " 10) Upgrade SMB (enable v2/3, disable v1)" #1
-    Write-Host " 11) Patch Mimikatz (WDigest)"
-    Write-Host " 12) Set Execution Policy to Restricted" #10
+    Write-Host "  4) Remove RDP Users (reset RDP access - removes all users)"
+    Write-Host "  5) Add RDP Users (interactively add users to RDP group)"
+    Write-Host "  6) Configure Firewall" #4
+    Write-Host "  7) Disable Unnecessary Services" #7
+    Write-Host "  8) Enable Advanced Auditing + Firewall Logging"
+    Write-Host "  9) Configure Splunk" #9
+    Write-Host " 10) Install EternalBlue Patch"
+    Write-Host " 11) Upgrade SMB (enable v2/3, disable v1)" #1
+    Write-Host " 12) Patch Mimikatz (WDigest)"
+    Write-Host " 13) Set Execution Policy to Restricted" #10
 }
 
 
@@ -1897,10 +1990,11 @@ while ($true) {
             '1' { Write-Host "`n***Quick Hardening (Essential Steps Only)...***" -ForegroundColor Magenta; Quick-Harden }
             '2' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords }
             '3' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
-            '4' { Write-Host "`n***Removing users from RDP group (except first two competition users)...***" -ForegroundColor Magenta; Remove-RDP-Users }
-            '5' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
-            '6' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
-            '7' { 
+            '4' { Write-Host "`n***Removing all users from RDP group (resetting RDP access)...***" -ForegroundColor Magenta; Remove-RDP-Users }
+            '5' { Write-Host "`n***Adding users to RDP group (interactive)...***" -ForegroundColor Magenta; Add-RDP-Users }
+            '6' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
+            '7' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
+            '8' { 
                 Write-Host "`n***Enabling Advanced Auditing and Firewall logging...***" -ForegroundColor Magenta
                 if (Test-Path ".\advancedAuditing.ps1") {
                     try {
@@ -1924,16 +2018,16 @@ while ($true) {
                     Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
                 }
             }
-            '8' {
+            '9' {
                 Write-Host "`n***Configuring Splunk...***" -ForegroundColor Magenta
                 $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
                 $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
                 Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
             }
-            '9' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
-            '10' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
-            '11' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
-            '12' { 
+            '10' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
+            '11' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
+            '12' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
+            '13' { 
                 Write-Host "`n***Setting Execution Policy back to Restricted...***" -ForegroundColor Magenta
                 try {
                     Set-ExecutionPolicy Restricted -Scope Process -Force
