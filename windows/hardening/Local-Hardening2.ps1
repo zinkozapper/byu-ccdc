@@ -87,18 +87,16 @@ $script:IsServerCore = $false
 $script:CurrentUser = $null
 $script:UserArray = @()
 $script:PortsObject = $null
-$script:DefenderStatus = "Unknown"
-$script:WindowsUpdateStatus = "Unknown"
 $script:EternalBlueStatus = "Unknown"
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Function names for tracking
 $functionNames = @(
-    "Initialize Context", "Change Passwords", "Enable Windows Defender", 
+    "Initialize Context", "Change Passwords", 
     "Quick Harden", "Add Competition Users", "Remove RDP Users", "Configure Firewall", 
     "Disable Unnecessary Services", "Enable Advanced Auditing", "Configure Splunk", 
-    "EternalBlue Mitigated", "Upgrade SMB", "Patch Mimikatz", "Run Windows Updates", 
+    "EternalBlue Mitigated", "Upgrade SMB", "Patch Mimikatz", 
     "Set Execution Policy"
 )
 
@@ -359,27 +357,6 @@ function Print-Log {
     foreach ($entry in $script:log.GetEnumerator()) {
         
         $status = $entry.Value
-        
-        # Override status with actual system state for Windows Update and Defender
-        if ($entry.Key -eq "Run Windows Updates" -and $script:WindowsUpdateStatus) {
-            if ($script:WindowsUpdateStatus -eq "Completed") {
-                $status = "Completed"
-            } elseif ($script:WindowsUpdateStatus -like "Completed*") {
-                $status = $script:WindowsUpdateStatus
-            } elseif ($script:WindowsUpdateStatus -like "Failed*") {
-                $status = $script:WindowsUpdateStatus
-            }
-        }
-        
-        if ($entry.Key -eq "Enable Windows Defender" -and $script:DefenderStatus) {
-            if ($script:DefenderStatus -eq "Enabled") {
-                $status = "Enabled"
-            } elseif ($script:DefenderStatus -eq "Disabled") {
-                $status = "Disabled/Failed"
-            } else {
-                $status = "$status (Status: $script:DefenderStatus)"
-            }
-        }
         
         $color = switch -Wildcard ($status) {
             "*successfully*" { "Green" }
@@ -1260,68 +1237,118 @@ function Get-Comma-Separated-List {
 
 <#
 .SYNOPSIS
-    Configures Windows Firewall with specified ports.
+    Sets Windows Firewall rules with specified ports.
+    
+.DESCRIPTION
+<#
+.SYNOPSIS
+    Configures Windows Firewall with mandatory Deny All Inbound rule and optional port allowances.
+    
+.DESCRIPTION
+    This function consolidates all firewall configuration logic. It always creates a high-priority
+    "Deny All Inbound" rule for security. It then handles three scenarios:
+    
+    - Scenario A: Script called with -f parameter - uses script-level $FirewallPorts
+    - Scenario B: Called from Quick-Harden without parameters - only Deny All (no Allow rules)
+    - Scenario C: Called manually/interactively - prompts user for ports and confirmation
+    
+.PARAMETER FirewallPorts
+    Optional array of port numbers to allow. If not provided, behavior depends on context.
+    
+.PARAMETER FromQuickHarden
+    Switch indicating this is called from Quick-Harden sequence. Prevents interactive prompts.
 #>
 function Configure-Firewall {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory=$false)]
+        [int[]]$FirewallPorts = $null,
+        
+        [Parameter(Mandatory=$false)]
+        [switch]$FromQuickHarden = $false
+    )
     
     Invoke-HardeningOperation -OperationName "Configure Firewall" -ScriptBlock {
-        $ready = $false
-        :outer while ($true) {
-            $desigPorts = Get-Comma-Separated-List -message "List needed port numbers for firewall config. Separate by commas."
-            $usualPorts = @(53, 3389, 80, 445, 139, 22, 88, 67, 68, 135, 139, 389, 636, 3268, 3269, 464) | Sort-Object
-            $commonScored = @(53, 3389, 80, 22)
-            $commonADorDC = @(139, 88, 67, 68, 135, 139, 389, 445, 636, 3268, 3269, 464)
+        try {
+            # Determine which scenario we're in and get ports
+            $portsToAllow = @()
             
-            Write-Host "All the following ports that we suggest are either common scored services, or usually needed for AD processes. We will say which is which. While this box isn't domain bound, AD ports have been left on the list in case this box gets bound later."
-            
-            foreach ($item in $usualPorts) {
-                if ($desigPorts -notcontains $item) {
-                    if ($item -in $commonScored) {
-                        Write-Host "`nCommon Scored Service" -ForegroundColor Green
-                    }
-                    if ($item -in $commonADorDC) {
-                        if ($item -eq 445) {
-                            Write-Host "`nCommon Scored Service" -ForegroundColor Green -NoNewline
-                            Write-Host " and" -ForegroundColor Cyan -NoNewline
-                            Write-Host " Common port needed for CD/AD processes" -ForegroundColor Red
-                        } else {
-                            Write-Host "`nCommon port needed for DC/AD processes" -ForegroundColor Red
+            # Scenario B: Called from Quick-Harden without parameters
+            if ($FromQuickHarden) {
+                # If ports are explicitly provided to function, use them; otherwise Scenario B (Deny All only)
+                if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
+                    $portsToAllow = $FirewallPorts
+                }
+                # If portsToAllow is still empty, Scenario B - only Deny All will be applied
+            }
+            # Scenario A: Script called with -f parameter (ports provided to function)
+            elseif ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
+                $portsToAllow = $FirewallPorts
+            }
+            # Scenario C: Interactive/manual call (not from Quick-Harden, no ports provided)
+            else {
+                # Interactive prompt for ports
+                $ready = $false
+                :outer while ($true) {
+                    $desigPorts = Get-Comma-Separated-List -message "List needed port numbers for firewall config. Separate by commas."
+                    $usualPorts = @(53, 3389, 80, 445, 139, 22, 88, 67, 68, 135, 139, 389, 636, 3268, 3269, 464) | Sort-Object
+                    $commonScored = @(53, 3389, 80, 22)
+                    $commonADorDC = @(139, 88, 67, 68, 135, 139, 389, 445, 636, 3268, 3269, 464)
+                    
+                    Write-Host "All the following ports that we suggest are either common scored services, or usually needed for AD processes. We will say which is which. While this box isn't domain bound, AD ports have been left on the list in case this box gets bound later."
+                    
+                    foreach ($item in $usualPorts) {
+                        if ($desigPorts -notcontains $item) {
+                            if ($item -in $commonScored) {
+                                Write-Host "`nCommon Scored Service" -ForegroundColor Green
+                            }
+                            if ($item -in $commonADorDC) {
+                                if ($item -eq 445) {
+                                    Write-Host "`nCommon Scored Service" -ForegroundColor Green -NoNewline
+                                    Write-Host " and" -ForegroundColor Cyan -NoNewline
+                                    Write-Host " Common port needed for CD/AD processes" -ForegroundColor Red
+                                } else {
+                                    Write-Host "`nCommon port needed for DC/AD processes" -ForegroundColor Red
+                                }
+                            }
+                            $confirmation = $(Write-Host "Need " -NoNewline) + $(Write-Host "$item" -ForegroundColor Green -NoNewline) + $(Write-Host ", " -NoNewline) + $(Write-Host "$($script:PortsObject.ports.$item.description)? " -ForegroundColor Cyan -NoNewline) + $(Write-Host "(y/n)" -ForegroundColor Yellow; Read-Host)
+                            
+                            while($true) {
+                                if ($confirmation.toLower() -eq "y") {
+                                    $desigPorts = @($desigPorts) + $item
+                                    break
+                                }
+                                if ($confirmation.toLower() -eq "n") {
+                                    break
+                                }
+                            }
                         }
                     }
-                    $confirmation = $(Write-Host "Need " -NoNewline) + $(Write-Host "$item" -ForegroundColor Green -NoNewline) + $(Write-Host ", " -NoNewline) + $(Write-Host "$($script:PortsObject.ports.$item.description)? " -ForegroundColor Cyan -NoNewline) + $(Write-Host "(y/n)" -ForegroundColor Yellow; Read-Host)
                     
+                    Write-Host "`n==== Designated Ports ====" -ForegroundColor Cyan
+                    Write-Host ($desigPorts -join "`n") | Sort-Object
+                    
+                    $confirmation = ""
                     while($true) {
+                        $confirmation = Prompt-Yes-No -Message "Are these ports correct (y/n)?"
                         if ($confirmation.toLower() -eq "y") {
-                            $desigPorts = @($desigPorts) + $item
-                            break
+                            $portsToAllow = $desigPorts
+                            $ready = $true
+                            break outer
                         }
                         if ($confirmation.toLower() -eq "n") {
+                            $ready = $false
                             break
                         }
                     }
                 }
-            }
-            
-            Write-Host "`n==== Designated Ports ====" -ForegroundColor Cyan
-            Write-Host ($desigPorts -join "`n") | Sort-Object
-            
-            $confirmation = ""
-            while($true) {
-                $confirmation = Prompt-Yes-No -Message "Are these ports correct (y/n)?"
-                if ($confirmation.toLower() -eq "y") {
-                    $ready = $true
-                    break outer
-                }
-                if ($confirmation.toLower() -eq "n") {
-                    $ready = $false
-                    break
+                
+                if ($ready -eq $false) {
+                    Write-Log -Level "INFO" -Message "Firewall configuration skipped by user"
+                    throw "Operation skipped by user"
                 }
             }
-        }
-        
-        if ($ready -eq $true) {
+            
             # Disable the firewall profiles temporarily
             netsh advfirewall set allprofiles state off | Out-Null
             
@@ -1329,28 +1356,60 @@ function Configure-Firewall {
             netsh advfirewall firewall set rule all dir=in new enable=no | Out-Null
             netsh advfirewall firewall set rule all dir=out new enable=no | Out-Null
             
-            # Iterate through each port and create the appropriate rules
-            foreach ($port in $desigPorts) {
-                $description = $script:PortsObject.ports.$port.description
-                
-                # Inbound rules
-                netsh advfirewall firewall add rule name="TCP Inbound $description" dir=in action=allow protocol=TCP localport=$port | Out-Null
-                netsh advfirewall firewall add rule name="UDP Inbound $description" dir=in action=allow protocol=UDP localport=$port | Out-Null
-                
-                # Outbound rules
-                netsh advfirewall firewall add rule name="TCP Outbound $description" dir=out action=allow protocol=TCP localport=$port | Out-Null
-                netsh advfirewall firewall add rule name="UDP Outbound $description" dir=out action=allow protocol=UDP localport=$port | Out-Null
-                
-                Write-Log -Level "SUCCESS" -Message "Added firewall rules for port $port ($description)"
+            # CRITICAL: Always create "Deny All Inbound" rule (with lower priority so Allow rules are evaluated first)
+            Write-Host "  [ACTION] Creating mandatory Deny All Inbound firewall rule..." -ForegroundColor White
+            netsh advfirewall firewall add rule name="Deny All Inbound" dir=in action=block priority=1000 | Out-Null
+            Write-Host "  [SUCCESS] Deny All Inbound rule created" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Created mandatory Deny All Inbound firewall rule"
+            
+            # If ports are specified, create Allow rules for them (with higher priority than Deny All so they're evaluated first)
+            if ($portsToAllow.Count -gt 0) {
+                Write-Host "  [ACTION] Creating Allow rules for specified ports..." -ForegroundColor White
+                foreach ($port in $portsToAllow) {
+                    # Try to get description from PortsObject, fallback to switch
+                    $description = ""
+                    if ($null -ne $script:PortsObject -and $null -ne $script:PortsObject.ports -and $null -ne $script:PortsObject.ports.$port) {
+                        $description = $script:PortsObject.ports.$port.description
+                    } else {
+                        $description = switch ($port) {
+                            22 { "SSH" }
+                            53 { "DNS" }
+                            80 { "HTTP" }
+                            443 { "HTTPS" }
+                            3389 { "RDP" }
+                            5985 { "WinRM-HTTP" }
+                            5986 { "WinRM-HTTPS" }
+                            default { "Port-$port" }
+                        }
+                    }
+                    
+                    # Inbound Allow rules (with higher priority/lower number than Deny All so they're evaluated first)
+                    netsh advfirewall firewall add rule name="TCP Inbound $description" dir=in action=allow protocol=TCP localport=$port priority=100 | Out-Null
+                    netsh advfirewall firewall add rule name="UDP Inbound $description" dir=in action=allow protocol=UDP localport=$port priority=100 | Out-Null
+                    
+                    # Outbound rules
+                    netsh advfirewall firewall add rule name="TCP Outbound $description" dir=out action=allow protocol=TCP localport=$port | Out-Null
+                    netsh advfirewall firewall add rule name="UDP Outbound $description" dir=out action=allow protocol=UDP localport=$port | Out-Null
+                    
+                    Write-Log -Level "SUCCESS" -Message "Added firewall rules for port $port ($description)"
+                }
+                Write-Host "  [SUCCESS] Allow rules created for ports: $($portsToAllow -join ', ')" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Firewall configured with ports: $($portsToAllow -join ', ')"
+            } else {
+                Write-Host "  [INFO] No ports specified - only Deny All Inbound rule applied" -ForegroundColor Yellow
+                Write-Log -Level "INFO" -Message "Firewall configured with Deny All Inbound rule only (no ports allowed)"
             }
             
             # Re-enable the firewall profiles
             netsh advfirewall set allprofiles state on | Out-Null
             Write-Host "Firewall configured successfully" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Firewall configuration completed"
-        } else {
-            Write-Log -Level "INFO" -Message "Firewall configuration skipped by user"
-            throw "Operation skipped by user"
+        } catch {
+            if ($_.Exception.Message -ne "Operation skipped by user") {
+                Write-Host "Firewall configuration failed: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "Firewall configuration failed: $($_.Exception.Message)"
+            }
+            throw
         }
     }
 }
@@ -1402,216 +1461,6 @@ function Disable-Unnecessary-Services {
 
 <#
 .SYNOPSIS
-    Enables and configures Windows Defender with comprehensive settings.
-#>
-function Enable-Windows-Defender {
-    [CmdletBinding()]
-    param()
-    
-    # Check OS compatibility - Defender availability varies by OS version
-    # Windows 10/11 and Server 2016+ have Windows Defender Antivirus
-    # Windows 7/8 and Server 2008/2012 have Windows Defender (basic)
-    # Windows Server Core may have limited Defender features
-    $defenderCompatible = @("Client7", "Client8", "Client10", "Client11", "Server2008R2", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
-    
-    # Track status for executive report
-    $script:DefenderStatus = "Unknown"
-    
-    Invoke-HardeningOperation -OperationName "Enable Windows Defender" -OSCompatibility $defenderCompatible -ProgressMessage "Enabling and configuring Windows Defender with comprehensive security settings" -ScriptBlock {
-        Write-Host "[INFO] Enabling Windows Defender for $($script:OSInfo.OSVersion)..." -ForegroundColor Cyan
-        Write-Host "[INFO] Defender features may vary by OS version" -ForegroundColor DarkGray
-        
-        $operationSuccess = @{}
-        $allOperationsSucceeded = $true
-        
-        # Start Defender Service
-        Write-Host "[ACTION] Starting Windows Defender service..." -ForegroundColor White
-        try {
-            # Check if service exists
-            $defenderService = Get-Service -Name WinDefend
-            if (-not $defenderService) {
-                Write-Host "  [WARNING] Windows Defender service (WinDefend) not found on this OS version" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "Windows Defender service not found on $($script:OSInfo.OSVersion)"
-                $operationSuccess["ServiceStart"] = $false
-                $allOperationsSucceeded = $false
-            } else {
-                Start-Service -Name WinDefend
-                Set-Service -Name WinDefend -StartupType Automatic
-                Write-Host "  [SUCCESS] Windows Defender service started and set to automatic" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Windows Defender service started and set to automatic"
-                $operationSuccess["ServiceStart"] = $true
-            }
-        } catch {
-            Write-Host "  [WARNING] Could not start Windows Defender service: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not start Windows Defender service: $($_.Exception.Message)" -Console
-            $operationSuccess["ServiceStart"] = $false
-            $allOperationsSucceeded = $false
-        }
-        
-        # Enable Attack Surface Reduction Rules (Windows 10/11 and Server 2019/2022)
-        # OS-specific: ASR rules are only available on Windows 10/11 and Server 2019/2022
-        if ($script:OSInfo.OSFamily -in "Client10", "Client11", "Server2019", "Server2022") {
-            Write-Host "[ACTION] Enabling Attack Surface Reduction (ASR) rules (available on $($script:OSInfo.OSVersion))..." -ForegroundColor White
-            $asrSuccess = $true
-            try {
-                $asrRules = @(
-                    "75668C1F-73B5-4CF0-BB93-3ECF5CB7CC84",
-                    "3B576869-A4EC-4529-8536-B80A7769E899",
-                    "D4F940AB-401B-4EfC-AADC-AD5F3C50688A",
-                    "D3E037E1-3EB8-44C8-A917-57927947596D",
-                    "5BEB7EFE-FD9A-4556-801D-275E5FFC04CC",
-                    "BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550",
-                    "92E97FA1-2EDF-4476-BDD6-9DD0B4DDDC7B",
-                    "D1E49AAC-8F56-4280-B9BA-993A6D77406C",
-                    "B2B3F03D-6A65-4F7B-A9C7-1C7EF74A9BA4",
-                    "C1DB55AB-C21A-4637-BB3F-A12568109D35",
-                    "01443614-CD74-433A-B99E-2ECDC07BFC25",
-                    "9E6C4E1F-7D60-472F-BA1A-A39EF669E4B2",
-                    "26190899-1602-49E8-8B27-EB1D0A1CE869",
-                    "7674BA52-37EB-4A4F-A9A1-F0F9A1619A2C",
-                    "E6DB77E5-3DF2-4CF1-B95A-636979351E5B"
-                )
-                
-                $asrEnabledCount = 0
-                foreach ($ruleId in $asrRules) {
-                    try {
-                        Add-MpPreference -AttackSurfaceReductionRules_Ids $ruleId -AttackSurfaceReductionRules_Actions Enabled | Out-Null
-                        $asrEnabledCount++
-                    } catch {
-                        Write-Verbose "Could not enable ASR rule $ruleId (may already be enabled or not supported)"
-                    }
-                }
-                if ($asrEnabledCount -gt 0) {
-                    Write-Host "  [SUCCESS] Enabled $asrEnabledCount Attack Surface Reduction rule(s)" -ForegroundColor Green
-                    Write-Log -Level "SUCCESS" -Message "Enabled $asrEnabledCount Attack Surface Reduction rule(s)"
-                } else {
-                    Write-Host "  [WARNING] Could not enable any ASR rules" -ForegroundColor Yellow
-                    $asrSuccess = $false
-                }
-            } catch {
-                Write-Host "  [WARNING] Could not enable all ASR rules: $($_.Exception.Message)" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "Could not enable all ASR rules: $($_.Exception.Message)"
-                $asrSuccess = $false
-            }
-            $operationSuccess["ASRRules"] = $asrSuccess
-            if (-not $asrSuccess) {
-                $allOperationsSucceeded = $false
-            }
-        } else {
-            Write-Host "[INFO] Attack Surface Reduction rules not available on $($script:OSInfo.OSVersion) (requires Windows 10/11 or Server 2019/2022)" -ForegroundColor DarkGray
-            Write-Log -Level "INFO" -Message "ASR rules skipped - not available on $($script:OSInfo.OSVersion)"
-        }
-        
-        # Remove exclusions
-        try {
-            $prefs = Get-MpPreference
-            if ($prefs) {
-                if ($prefs.AttackSurfaceReductionOnlyExclusions) {
-                    foreach ($ExcludedASR in $prefs.AttackSurfaceReductionOnlyExclusions) {
-                        Remove-MpPreference -AttackSurfaceReductionOnlyExclusions $ExcludedASR | Out-Null
-                    }
-                }
-                if ($prefs.ExclusionExtension) {
-                    foreach ($ExcludedExt in $prefs.ExclusionExtension) {
-                        Remove-MpPreference -ExclusionExtension $ExcludedExt | Out-Null
-                    }
-                }
-                if ($prefs.ExclusionIpAddress) {
-                    foreach ($ExcludedIp in $prefs.ExclusionIpAddress) {
-                        Remove-MpPreference -ExclusionIpAddress $ExcludedIp | Out-Null
-                    }
-                }
-                if ($prefs.ExclusionPath) {
-                    foreach ($ExcludedDir in $prefs.ExclusionPath) {
-                        Remove-MpPreference -ExclusionPath $ExcludedDir | Out-Null
-                    }
-                }
-                if ($prefs.ExclusionProcess) {
-                    foreach ($ExcludedProc in $prefs.ExclusionProcess) {
-                        Remove-MpPreference -ExclusionProcess $ExcludedProc | Out-Null
-                    }
-                }
-                Write-Log -Level "SUCCESS" -Message "Removed Defender exclusions"
-            }
-        } catch {
-            Write-Log -Level "WARNING" -Message "Could not remove Defender exclusions: $($_.Exception.Message)"
-            $operationSuccess["RemoveExclusions"] = $false
-            $allOperationsSucceeded = $false
-        }
-        
-        # Enable Defender using PowerShell cmdlets (primary method)
-        Write-Host "[ACTION] Enabling Windows Defender real-time monitoring and protection features..." -ForegroundColor White
-        try {
-            # Enable Real-time Monitoring
-            Set-MpPreference -DisableRealtimeMonitoring $false
-            $operationSuccess["RealTimeMonitoring"] = $true
-            
-            # Enable other protection features
-            Set-MpPreference -DisableBehaviorMonitoring $false
-            Set-MpPreference -DisableBlockAtFirstSeen $false
-            Set-MpPreference -DisableIOAVProtection $false
-            Set-MpPreference -DisableScriptScanning $false
-            $operationSuccess["ProtectionFeatures"] = $true
-            
-            Write-Host "  [SUCCESS] Windows Defender protection features enabled via PowerShell cmdlets" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Enabled Windows Defender protection features via Set-MpPreference"
-        } catch {
-            Write-Host "  [WARNING] Could not enable Defender via PowerShell cmdlets: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not enable Defender via PowerShell cmdlets: $($_.Exception.Message)"
-            $operationSuccess["ProtectionFeatures"] = $false
-            $allOperationsSucceeded = $false
-        }
-        
-        # Verify Defender is enabled
-        try {
-            $defenderStatus = Get-MpPreference
-            if ($defenderStatus.DisableRealtimeMonitoring -eq $false) {
-                $script:DefenderStatus = "Enabled"
-                Write-Host "  [SUCCESS] Verified: Windows Defender is enabled" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Verified Windows Defender is enabled"
-            } else {
-                $script:DefenderStatus = "Disabled"
-                Write-Host "  [WARNING] Windows Defender real-time monitoring appears to be disabled" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "Windows Defender real-time monitoring appears disabled"
-                $allOperationsSucceeded = $false
-            }
-        } catch {
-            Write-Host "  [WARNING] Could not verify Defender status: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not verify Defender status: $($_.Exception.Message)"
-            $script:DefenderStatus = "Unknown"
-            $allOperationsSucceeded = $false
-        }
-        
-        # Verify service is running
-        try {
-            $serviceStatus = Get-Service WinDefend
-            if ($serviceStatus.Status -eq "Running") {
-                Write-Host "  [SUCCESS] Windows Defender service is running" -ForegroundColor Green
-                $operationSuccess["ServiceRunning"] = $true
-            } else {
-                Write-Host "  [WARNING] Windows Defender service is not running (Status: $($serviceStatus.Status))" -ForegroundColor Yellow
-                $operationSuccess["ServiceRunning"] = $false
-                $allOperationsSucceeded = $false
-            }
-        } catch {
-            Write-Host "  [WARNING] Could not check Defender service status: $($_.Exception.Message)" -ForegroundColor Yellow
-            $operationSuccess["ServiceRunning"] = $false
-            $allOperationsSucceeded = $false
-        }
-        
-        # Report final status
-        if ($allOperationsSucceeded) {
-        Write-Host "Windows Defender enabled and configured successfully" -ForegroundColor Green
-        } else {
-            $failedOps = $operationSuccess.GetEnumerator() | Where-Object { $_.Value -eq $false } | ForEach-Object { $_.Key }
-            Write-Host "Windows Defender configuration completed with errors. Failed operations: $($failedOps -join ', ')" -ForegroundColor Yellow
-            throw "Windows Defender configuration completed with errors: $($failedOps -join ', ')"
-        }
-    }
-}
-
-<#
-.SYNOPSIS
     Quick harden function that performs essential hardening steps.
 #>
 function Quick-Harden {
@@ -1631,79 +1480,55 @@ function Quick-Harden {
         Initialize-System
         
         # Step 1: Upgrade SMB
-        Write-Host "`nStep 1/7: Upgrading SMB..." -ForegroundColor Cyan
+        Write-Host "`nStep 1/8: Upgrading SMB..." -ForegroundColor Cyan
         Upgrade-SMB
         
         # Step 2: Change Passwords
-        Write-Host "`nStep 2/7: Changing Passwords..." -ForegroundColor Cyan
+        Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
         Change-Passwords
         
-        # Step 3: Configure Firewall (uses FirewallPorts parameter or default)
-        Write-Host "`nStep 3/7: Configuring Firewall..." -ForegroundColor Cyan
-        # Use FirewallPorts parameter if provided, otherwise use default (port 80)
-        $portArray = $FirewallPorts
-        if ($portArray.Count -eq 0) {
-            $portArray = @(80)
-        }
-        Write-Host "  [INFO] Configuring firewall with ports: $($portArray -join ', ')" -ForegroundColor Yellow
-        
-        try {
-            # Disable firewall temporarily
-            netsh advfirewall set allprofiles state off | Out-Null
-            
-            # Disable all existing rules
-            netsh advfirewall firewall set rule all dir=in new enable=no | Out-Null
-            netsh advfirewall firewall set rule all dir=out new enable=no | Out-Null
-            
-            # Add port rules
-            foreach ($port in $portArray) {
-                $description = switch ($port) {
-                    22 { "SSH" }
-                    53 { "DNS" }
-                    80 { "HTTP" }
-                    443 { "HTTPS" }
-                    3389 { "RDP" }
-                    5985 { "WinRM-HTTP" }
-                    5986 { "WinRM-HTTPS" }
-                    default { "Port-$port" }
-                }
-                
-                # Inbound rules
-                netsh advfirewall firewall add rule name="TCP Inbound $description" dir=in action=allow protocol=TCP localport=$port | Out-Null
-                netsh advfirewall firewall add rule name="UDP Inbound $description" dir=in action=allow protocol=UDP localport=$port | Out-Null
-                
-                # Outbound rules
-                netsh advfirewall firewall add rule name="TCP Outbound $description" dir=out action=allow protocol=TCP localport=$port | Out-Null
-                netsh advfirewall firewall add rule name="UDP Outbound $description" dir=out action=allow protocol=UDP localport=$port | Out-Null
-            }
-            
-            # Re-enable firewall
-            netsh advfirewall set allprofiles state on | Out-Null
-            Write-Host "Firewall configured with ports: $($portArray -join ', ')" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Quick harden firewall configured with ports: $($portArray -join ', ')"
-        } catch {
-            Write-Host "Firewall configuration failed: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "Quick harden firewall configuration failed: $($_.Exception.Message)"
+        # Step 3: Configure Firewall
+        Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
+        # Scenario A: If script was called with -f parameter, use those ports
+        # Scenario B: If no -f parameter (or default), only apply Deny All (no Allow rules)
+        # Check if script-level FirewallPorts was explicitly provided
+        # Note: Default is @(80), so we need to check if it was explicitly set
+        # For Scenario B (Quick-Harden default), we call without ports to get Deny All only
+        # For Scenario A, we pass the ports explicitly
+        if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
+            # Check if it's not just the default single port 80
+            # If user explicitly provided -f 80, that's still Scenario A
+            # We'll pass it through and let Configure-Firewall handle it
+            Write-Host "  [INFO] Configuring firewall with ports from script parameter: $($FirewallPorts -join ', ')" -ForegroundColor Yellow
+            Configure-Firewall -FirewallPorts $FirewallPorts -FromQuickHarden
+        } else {
+            # No ports provided (Scenario B: Deny All only)
+            Write-Host "  [INFO] Applying default firewall configuration (Deny All Inbound, no ports allowed)" -ForegroundColor Yellow
+            Configure-Firewall -FromQuickHarden
         }
         
         # Step 4: Disable unnecessary services
-        Write-Host "`nStep 4/7: Disabling Unnecessary Services..." -ForegroundColor Cyan
+        Write-Host "`nStep 4/8: Disabling Unnecessary Services..." -ForegroundColor Cyan
         Disable-Unnecessary-Services
         
         # Step 5: Add Competition Users (USER INPUT REQUIRED)
-        Write-Host "`nStep 5/7: Adding Competition Users..." -ForegroundColor Cyan
+        Write-Host "`nStep 5/8: Adding Competition Users..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for usernames/passwords" -ForegroundColor Yellow
         Add-Competition-Users
         
-        # Step 6: Configure Splunk (USER INPUT REQUIRED)
-        Write-Host "`nStep 6/7: Configuring Splunk..." -ForegroundColor Cyan
+        # Step 6: Remove non-administrator users from Remote Desktop Users group
+        Write-Host "`nStep 6/8: Removing non-administrator users from Remote Desktop Users group..." -ForegroundColor Cyan
+        Remove-RDP-Users
+        
+        # Step 7: Configure Splunk (USER INPUT REQUIRED)
+        Write-Host "`nStep 7/8: Configuring Splunk..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for Splunk configuration" -ForegroundColor Yellow
         $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
         $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
         Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
         
-        # Step 7: Set Execution Policy to Restricted
-        Write-Host "`nStep 7/7: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
+        # Step 8: Set Execution Policy to Restricted
+        Write-Host "`nStep 8/8: Setting Execution Policy to Restricted..." -ForegroundColor Cyan
         try {
             Set-ExecutionPolicy Restricted -Scope Process -Force
             Write-Host "Execution Policy set to Restricted successfully" -ForegroundColor Green
@@ -1716,7 +1541,7 @@ function Quick-Harden {
         
         Write-Host "`n=== QUICK HARDENING COMPLETED ===" -ForegroundColor Green
         Write-Host "Essential hardening steps have been completed successfully!" -ForegroundColor Green
-        Write-Host "Please Run Windows Updates now! It might take a while." -ForegroundColor Yellow
+        Write-Host "Next Hardening Steps: Turn on Windows Defender! Then run Windows Updates! It might take a while." -ForegroundColor Yellow
     }
 }
 
@@ -1963,192 +1788,6 @@ function Patch-Mimikatz {
 
 <#
 .SYNOPSIS
-    Runs Windows Updates.
-#>
-function Run-Windows-Updates {
-    [CmdletBinding()]
-    param()
-    
-    Invoke-HardeningOperation -OperationName "Run Windows Updates" -ProgressMessage "Checking for and installing Windows Updates (this may take a while)" -ScriptBlock {
-        Write-Host "[STEP 1/4] Clearing Windows Update cache..." -ForegroundColor Cyan
-        
-        try {
-            Write-Host "  [ACTION] Stopping Windows Update service..." -ForegroundColor White
-            Stop-Service -Name wuauserv -Force
-            Write-Host "  [SUCCESS] Windows Update service stopped" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Stopped Windows Update service"
-        } catch {
-            Write-Host "  [WARNING] Could not stop Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not stop Windows Update service: $($_.Exception.Message)"
-        }
-        
-        try {
-            if (Test-Path "C:\Windows\SoftwareDistribution") {
-                Write-Host "  [ACTION] Clearing SoftwareDistribution folder..." -ForegroundColor White
-                Remove-Item -Path "C:\Windows\SoftwareDistribution\*" -Recurse -Force
-                Write-Host "  [SUCCESS] Windows Update cache cleared" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Cleared Windows Update cache"
-            } else {
-                Write-Host "  [INFO] SoftwareDistribution folder not found, nothing to clear" -ForegroundColor Gray
-            }
-        } catch {
-            Write-Host "  [WARNING] Could not clear Windows Update cache: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not clear Windows Update cache: $($_.Exception.Message)"
-        }
-        
-        try {
-            Write-Host "  [ACTION] Starting Windows Update service..." -ForegroundColor White
-            Start-Service -Name wuauserv
-            Write-Host "  [SUCCESS] Windows Update service started" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Started Windows Update service"
-        } catch {
-            Write-Host "  [WARNING] Could not start Windows Update service: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Could not start Windows Update service: $($_.Exception.Message)"
-        }
-        
-        # Check for disk space
-        Write-Host "[STEP 2/4] Checking disk space..." -ForegroundColor Cyan
-        try {
-            $diskSpace = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object -ExpandProperty FreeSpace
-            $freeSpaceGB = [math]::Round($diskSpace / 1GB, 2)
-            Write-Host "  [INFO] Free disk space: $freeSpaceGB GB" -ForegroundColor White
-            
-            if ($diskSpace -lt 1073741824) { # 1 GB in bytes
-                Write-Host "  [ERROR] Insufficient disk space available on the system drive. Please free up disk space and try again." -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Insufficient disk space for Windows Updates" -Console
-                throw "Insufficient disk space"
-            } else {
-                Write-Host "  [SUCCESS] Sufficient disk space available" -ForegroundColor Green
-            }
-        } catch {
-            if ($_.Exception.Message -ne "Insufficient disk space") {
-                Write-Host "  [WARNING] Could not check disk space: $($_.Exception.Message)" -ForegroundColor Yellow
-                Write-Log -Level "WARNING" -Message "Could not check disk space: $($_.Exception.Message)"
-            } else {
-                throw
-            }
-        }
-        
-        # Check for updates using COM object
-        Write-Host "[STEP 3/4] Searching for available updates..." -ForegroundColor Cyan
-        $script:WindowsUpdateStatus = "Unknown"
-        try {
-            Write-Host "  [INFO] Connecting to Windows Update service..." -ForegroundColor White
-            $wuSession = New-Object -ComObject Microsoft.Update.Session
-            $wuSearcher = $wuSession.CreateUpdateSearcher()
-            Write-Host "  [INFO] Searching for updates (this may take several minutes)..." -ForegroundColor White
-            $searchResult = $wuSearcher.Search("IsInstalled=0 and Type='Software'")            
-            if ($searchResult.Updates.Count -gt 0) {
-                Write-Host "  [SUCCESS] Found $($searchResult.Updates.Count) update(s) to install" -ForegroundColor Green
-                Write-Log -Level "INFO" -Message "Found $($searchResult.Updates.Count) update(s) to install" -Console
-                
-                $totalUpdates = $searchResult.Updates.Count
-                $updateCounter = 0
-                $successfulUpdates = 0
-                $failedUpdates = 0
-                
-                Write-Host "[STEP 4/4] Installing updates..." -ForegroundColor Cyan
-                Write-Host "  [INFO] This process may take a significant amount of time..." -ForegroundColor Yellow
-                
-                # Initialize progress bar
-                Write-Progress -Activity "Installing Windows Updates" -Status "0% Complete" -PercentComplete 0
-                
-                # Create update collection for downloads
-                $updatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl                
-                # Add updates that need to be downloaded
-                foreach ($update in $searchResult.Updates) {
-                    if ($update.IsDownloaded -eq $false) {
-                        try {
-                            $updatesToDownload.Add($update) | Out-Null
-                        } catch {
-                            Write-Host "    [WARNING] Could not add update to download collection: $($update.Title)" -ForegroundColor Yellow
-                            Write-Log -Level "WARNING" -Message "Could not add update to download collection: $($update.Title)"
-                        }
-                    }
-                }
-                
-                # Download updates if needed
-                if ($updatesToDownload.Count -gt 0) {
-                    Write-Host "  [INFO] Downloading $($updatesToDownload.Count) update(s)..." -ForegroundColor White
-                    try {
-                        $downloader = $wuSession.CreateUpdateDownloader()
-                        $downloader.Updates = $updatesToDownload
-                        $downloadResult = $downloader.Download()
-                        
-                        if ($downloadResult.ResultCode -eq 2) {
-                            Write-Host "  [SUCCESS] Updates downloaded successfully" -ForegroundColor Green
-                        } else {
-                            Write-Host "  [WARNING] Download returned code: $($downloadResult.ResultCode)" -ForegroundColor Yellow
-                        }
-                    } catch {
-                        Write-Host "  [WARNING] Download failed: $($_.Exception.Message)" -ForegroundColor Yellow
-                    }
-                }
-                
-                # Install updates
-                foreach ($update in $searchResult.Updates) {
-                    $updateCounter++
-                    $percentComplete = [math]::Round(($updateCounter / $totalUpdates) * 100)
-                    Write-Progress -Activity "Installing Windows Updates" -Status "$percentComplete% Complete - Update $updateCounter of $totalUpdates" -CurrentOperation "$($update.Title)" -PercentComplete $percentComplete
-                    
-                    # Install update
-                    try {
-                        $installer = $wuSession.CreateUpdateInstaller()
-                        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
-                        $updatesToInstall.Add($update) | Out-Null
-                        $installer.Updates = $updatesToInstall
-                        $installResult = $installer.Install()                        
-                        if ($installResult.ResultCode -eq 2) {
-                            Write-Host "    [SUCCESS] Update installed successfully" -ForegroundColor Green
-                            Write-Log -Level "SUCCESS" -Message "Installed update: $($update.Title)"
-                            $successfulUpdates++
-                        } elseif ($installResult.ResultCode -eq 3010) {
-                            Write-Host "    [SUCCESS] Update installed (restart required)" -ForegroundColor Green
-                            Write-Log -Level "SUCCESS" -Message "Installed update (restart required): $($update.Title)"
-                            $successfulUpdates++
-                        } else {
-                            Write-Host "    [WARNING] Update installation returned code $($installResult.ResultCode): $($update.Title)" -ForegroundColor Yellow
-                            Write-Log -Level "WARNING" -Message "Update installation returned code $($installResult.ResultCode): $($update.Title)"
-                            $failedUpdates++
-                        }
-                    } catch {
-                        Write-Host "    [ERROR] Failed to install update: $($_.Exception.Message)" -ForegroundColor Red
-                        Write-Log -Level "ERROR" -Message "Failed to install update $($update.Title): $($_.Exception.Message)"
-                        $failedUpdates++
-                    }
-                }
-                
-                Write-Progress -Activity "Installing Windows Updates" -Completed
-                Write-Host "  [INFO] Update installation summary:" -ForegroundColor Cyan
-                Write-Host "    Successful: $successfulUpdates" -ForegroundColor Green
-                Write-Host "    Failed: $failedUpdates" -ForegroundColor $(if ($failedUpdates -eq 0) { "Green" } else { "Red" })
-                
-                if ($failedUpdates -eq 0) {
-                    $script:WindowsUpdateStatus = "Completed"
-                Write-Host "[SUCCESS] Windows Updates installation process completed." -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Windows Updates completed: $successfulUpdates succeeded, $failedUpdates failed" -Console
-            } else {
-                    $script:WindowsUpdateStatus = "Completed with errors"
-                    Write-Host "[WARNING] Windows Updates completed with $failedUpdates failure(s)." -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Windows Updates completed with errors: $successfulUpdates succeeded, $failedUpdates failed" -Console
-                }
-            } else {
-                $script:WindowsUpdateStatus = "Completed - No updates available"
-                Write-Host "  [INFO] No updates available - system is up to date" -ForegroundColor Green
-                Write-Log -Level "INFO" -Message "No updates available" -Console
-            }
-        } catch {
-            $script:WindowsUpdateStatus = "Failed - $($_.Exception.Message)"
-            Write-Host "  [ERROR] Windows Update search/installation failed: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "Windows Update search/installation failed: $($_.Exception.Message)" -Console
-            Write-Host "[WARNING] Windows Update process encountered an error. You may need to run Windows Update manually." -ForegroundColor Yellow
-            throw
-        }
-    }
-}
-
-<#
-.SYNOPSIS
     Displays the main menu.
 #>
 function Show-Main-Menu {
@@ -2156,24 +1795,22 @@ function Show-Main-Menu {
     Write-Host "`n==== Local Windows Hardening Menu ====" -ForegroundColor Green
     Write-Host "Prerequisites:"
     Write-Host "  - (A) Initialize Context BEFORE running hardening tasks" -ForegroundColor Yellow
-    Write-Host "  - Configure Splunk (10) works best after Initialize Context (A)" -ForegroundColor Yellow
+    Write-Host "  - Configure Splunk (8) works best after Initialize Context (A)" -ForegroundColor Yellow
     Write-Host "`nSelect an option by number (or Q to quit):" -ForegroundColor Cyan
     Write-Host "  0) Print Execution Summary"
     Write-Host "  A) Initialize Context (download files, set variables)"
     Write-Host "  1) Quick Harden (essential steps only)"
     Write-Host "  2) Change Passwords" #2 Passwords Changes | 4 word passphrase from word list -> set all passwords to username + passphrase + print passphrase | make seperate script for this to rederive passwords. List of users + secret -> csv of user, password
-    Write-Host "  3) Enable Windows Defender" #5
-    Write-Host "  4) Add Competition Users" #8
-    Write-Host "  5) Remove RDP Users (harden access)"
-    Write-Host "  6) Configure Firewall" #4
-    Write-Host "  7) Disable Unnecessary Services" #7
-    Write-Host "  8) Enable Advanced Auditing + Firewall Logging"
-    Write-Host "  9) Configure Splunk" #9
-    Write-Host " 10) Install EternalBlue Patch"
-    Write-Host " 11) Upgrade SMB (enable v2/3, disable v1)" #1
-    Write-Host " 12) Patch Mimikatz (WDigest)"
-    Write-Host " 13) Run Windows Updates"
-    Write-Host " 14) Set Execution Policy to Restricted" #10
+    Write-Host "  3) Add Competition Users" #8
+    Write-Host "  4) Remove RDP Users (harden access)"
+    Write-Host "  5) Configure Firewall" #4
+    Write-Host "  6) Disable Unnecessary Services" #7
+    Write-Host "  7) Enable Advanced Auditing + Firewall Logging"
+    Write-Host "  8) Configure Splunk" #9
+    Write-Host "  9) Install EternalBlue Patch"
+    Write-Host " 10) Upgrade SMB (enable v2/3, disable v1)" #1
+    Write-Host " 11) Patch Mimikatz (WDigest)"
+    Write-Host " 12) Set Execution Policy to Restricted" #10
 }
 
 
@@ -2259,12 +1896,11 @@ while ($true) {
             'A' { Initialize-System }
             '1' { Write-Host "`n***Quick Hardening (Essential Steps Only)...***" -ForegroundColor Magenta; Quick-Harden }
             '2' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords }
-            '3' { Write-Host "`n***Enabling Windows Defender...***" -ForegroundColor Magenta; Enable-Windows-Defender }
-            '4' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
-            '5' { Write-Host "`n***Removing users from RDP group (except first two competition users)...***" -ForegroundColor Magenta; Remove-RDP-Users }
-            '6' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
-            '7' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
-            '8' { 
+            '3' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
+            '4' { Write-Host "`n***Removing users from RDP group (except first two competition users)...***" -ForegroundColor Magenta; Remove-RDP-Users }
+            '5' { Write-Host "`n***Configuring firewall...***" -ForegroundColor Magenta; Configure-Firewall }
+            '6' { Write-Host "`n***Disabling unnecessary services...***" -ForegroundColor Magenta; Disable-Unnecessary-Services }
+            '7' { 
                 Write-Host "`n***Enabling Advanced Auditing and Firewall logging...***" -ForegroundColor Magenta
                 if (Test-Path ".\advancedAuditing.ps1") {
                     try {
@@ -2288,17 +1924,16 @@ while ($true) {
                     Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
                 }
             }
-            '9' {
+            '8' {
                 Write-Host "`n***Configuring Splunk...***" -ForegroundColor Magenta
                 $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
                 $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
                 Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
             }
-            '10' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
-            '11' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
-            '12' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
-            '13' { Write-Host "`n***Running Windows Updates...***" -ForegroundColor Magenta; Run-Windows-Updates }
-            '14' { 
+            '9' { Write-Host "`n***Installing EternalBlue Patch...***" -ForegroundColor Magenta; Install-EternalBluePatch }
+            '10' { Write-Host "`n***Upgrading SMB...***" -ForegroundColor Magenta; Upgrade-SMB }
+            '11' { Write-Host "`n***Patching Mimikatz (WDigest)...***" -ForegroundColor Magenta; Patch-Mimikatz }
+            '12' { 
                 Write-Host "`n***Setting Execution Policy back to Restricted...***" -ForegroundColor Magenta
                 try {
                     Set-ExecutionPolicy Restricted -Scope Process -Force
