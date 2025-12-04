@@ -806,7 +806,8 @@ function Initialize-Context {
                 '3268' = @{ description = 'Global Catalog' }
                 '3269' = @{ description = 'Global Catalog SSL' }
                 '464'  = @{ description = 'Kerberos Change/Set Password' }
-            } }
+            }
+            }
             Write-Log -Level "WARNING" -Message "ports.json not found, using fallback port definitions"
         }
         
@@ -983,7 +984,7 @@ function New-CompetitionUser {
     # Check if user already exists
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
     if ($existingUser) {
-        Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
+        Write-Host "User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
         Write-Log -Level "WARNING" -Message "User ${Username} already exists"
         $userCreated = $true
     } else {
@@ -1836,7 +1837,101 @@ function Install-EternalBluePatch {
 .SYNOPSIS
     Upgrades SMB by enabling SMBv2/v3 and disabling SMBv1.
 #>
-
+function Upgrade-SMB {
+    [CmdletBinding()]
+    param()
+    
+    # SMB configuration varies by OS version
+    # Get-SmbServerConfiguration is available on Windows Server 2012+ and Windows 8+
+    # Older OS versions may need different approaches
+    $smbUpgradeCompatible = @("Client8", "Client10", "Client11", "Server2012", "Server2012R2", "Server2016", "Server2019", "Server2022")
+    
+    Invoke-HardeningOperation -OperationName "Upgrade SMB" -OSCompatibility $smbUpgradeCompatible -ProgressMessage "Enabling SMBv2/v3 and disabling SMBv1 for improved security" -ScriptBlock {
+        # Check if SMB module is available (required for Get-SmbServerConfiguration)
+        if (-not (Get-Module -ListAvailable -Name SmbShare)) {
+            Write-Host "[WARNING] SMB module not available. Attempting to import..." -ForegroundColor Yellow
+            try {
+                Import-Module SmbShare
+                Write-Log -Level "SUCCESS" -Message "Imported SMB module"
+            } catch {
+                Write-Host "[WARNING] Could not import SMB module. SMB configuration may not work correctly." -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "SMB module not available: $($_.Exception.Message)"
+            }
+        }
+        
+        try {
+            # Detect the current SMB version
+            Write-Host "[INFO] Detecting current SMB configuration..." -ForegroundColor Cyan
+            $smbConfig = Get-SmbServerConfiguration
+            $smbv1Enabled = $smbConfig.EnableSMB1Protocol
+            $smbv2Enabled = $smbConfig.EnableSMB2Protocol
+            # EnableSMB3Protocol property may not exist on all OS versions, use try-catch
+            $smbv3Enabled = $null
+            try {
+                $smbv3Enabled = $smbConfig.EnableSMB3Protocol
+            } catch {
+                # Property doesn't exist on this OS version
+                $smbv3Enabled = $null
+            }
+            $restart = $false
+            
+            Write-Host "[INFO] Current SMB Configuration:" -ForegroundColor Cyan
+            Write-Host "  SMBv1: $(if ($smbv1Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv1Enabled) { 'Red' } else { 'Green' })
+            Write-Host "  SMBv2: $(if ($smbv2Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv2Enabled) { 'Green' } else { 'Yellow' })
+            if ($null -ne $smbv3Enabled) {
+                Write-Host "  SMBv3: $(if ($smbv3Enabled) { 'Enabled' } else { 'Disabled' })" -ForegroundColor $(if ($smbv3Enabled) { 'Green' } else { 'Yellow' })
+            }
+            
+            # Enable SMBv2 (SMBv3 is enabled automatically if supported on Server 2012+ and Windows 8+)
+            if ($smbv2Enabled -eq $false) {
+                Write-Host "[ACTION] Enabling SMBv2..." -ForegroundColor Yellow
+                try {
+                    Set-SmbServerConfiguration -EnableSMB2Protocol $true -Force
+                    Write-Host "[SUCCESS] SMBv2 enabled" -ForegroundColor Green
+                    Write-Log -Level "SUCCESS" -Message "Enabled SMBv2/SMBv3"
+                    $restart = $true
+                } catch {
+                    Write-Host "[FAILED] SMB upgrade failed: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Log -Level "ERROR" -Message "SMB upgrade failed: $($_.Exception.Message)"
+                    throw
+                }
+            } else {
+                Write-Host "[INFO] SMBv2 already enabled" -ForegroundColor Green
+                Write-Log -Level "INFO" -Message "SMBv2 already enabled"
+            }
+            
+            # Disable SMBv1 (vulnerable protocol)
+            if ($smbv1Enabled -eq $true) {
+                Write-Host "[ACTION] Disabling SMBv1 (vulnerable protocol)..." -ForegroundColor Yellow
+                try {
+                    Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+                    Write-Host "[SUCCESS] SMBv1 disabled" -ForegroundColor Green
+                    Write-Log -Level "SUCCESS" -Message "Disabled SMBv1"
+                    $restart = $true
+                } catch {
+                    Write-Host "[FAILED] SMB upgrade failed: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Log -Level "ERROR" -Message "SMB upgrade failed: $($_.Exception.Message)"
+                    throw
+                }
+            } else {
+                Write-Host "[INFO] SMBv1 already disabled" -ForegroundColor Green
+                Write-Log -Level "INFO" -Message "SMBv1 already disabled"
+            }
+            
+            # Restart might be required after these changes
+            if ($restart -eq $true) {
+                Write-Host "[WARNING] System restart recommended for SMB changes to take full effect" -ForegroundColor Yellow
+                Write-Log -Level "WARNING" -Message "System restart may be required for SMB changes"
+            } else {
+                Write-Host "[SUCCESS] SMB configuration is already optimal" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "[ERROR] SMB upgrade failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "SMB upgrade failed: $($_.Exception.Message)" -Console
+            throw
+        }
+    }
+}
 
 <#
 .SYNOPSIS
@@ -2081,6 +2176,8 @@ function Show-Main-Menu {
     Write-Host " 14) Set Execution Policy to Restricted" #10
 }
 
+
+#endregion
 
 #region Main Script Execution
 
