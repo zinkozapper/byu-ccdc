@@ -61,11 +61,15 @@ param(
 #region Script Configuration and Global Variables
 
 $ErrorActionPreference = "Continue"
-$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/hardening"
+# TODO: Change this to the BYU-CCDC repo before pushing to production.
+# Correct repo: https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/hardening
+$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/zinkozapper/byu-ccdc/refs/heads/main/windows/hardening/"
 $portsFile = "ports.json"
-$usersFile = "users.txt"
+$usersFile = "users.txt"    
 $advancedAuditingFile = "advancedAuditing.ps1"
 $patchURLFile = "patchURLs.json"
+$wordlistFileName = "wordlist.txt"
+$passwordWordCount = 5 # Max of 8 words or stuff breaks.
 
 # Global variables for tracking
 $script:OperationResults = @{
@@ -268,10 +272,7 @@ Script Version: 2.0
     }
 }
 
-<#
-.SYNOPSIS
-    Writes a message to the log file and optionally to console.
-#>
+
 function Write-Log {
     [CmdletBinding()]
     param(
@@ -310,10 +311,7 @@ function Write-Log {
     }
 }
 
-<#
-.SYNOPSIS
-    Updates the operation tracking log.
-#>
+
 function Update-Log {
     param(
         [string]$key,
@@ -322,20 +320,13 @@ function Update-Log {
     $script:log[$key] = $value
 }
 
-<#
-.SYNOPSIS
-    Initializes the function execution log.
-#>
+
 function Initialize-Log {
     foreach ($func in $functionNames) {
         Update-Log $func "Not executed"
     }
 }
 
-<#
-.SYNOPSIS
-    Prints the execution summary log.
-#>
 function Print-Log {
     Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
     Write-Host "### Script Execution Summary ###" -ForegroundColor Green
@@ -522,63 +513,6 @@ function Invoke-HardeningOperation {
 }
 
 
-<#
-.SYNOPSIS
-    Validates prerequisites before executing an operation.
-#>
-function Test-Prerequisite {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$PrerequisiteType,
-        
-        [Parameter(Mandatory=$true)]
-        [string]$Value,
-        
-        [string]$OperationName = "Unknown"
-    )
-    
-    try {
-        switch ($PrerequisiteType) {
-            "RegistryPath" {
-                if (-not (Test-Path $Value)) {
-                    Write-Host "[WARNING] Registry path not found for $OperationName : $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : Registry path not found: $Value" -Console
-                    return $false
-                }
-            }
-            "Service" {
-                $service = Get-Service -Name $Value
-                if (-not $service) {
-                    Write-Host "[WARNING] Service not found for $OperationName : $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : Service not found: $Value" -Console
-                    return $false
-                }
-            }
-            "File" {
-                if (-not (Test-Path $Value)) {
-                    Write-Host "[WARNING] File not found for $OperationName : $Value" -ForegroundColor Yellow
-                    Write-Log -Level "WARNING" -Message "Prerequisite check failed for $OperationName : File not found: $Value" -Console
-                    return $false
-                }
-            }
-        }
-        return $true
-    } catch {
-        Write-Host "[WARNING] Prerequisite check error for $OperationName : $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Log -Level "WARNING" -Message "Prerequisite check error for $OperationName : $($_.Exception.Message)" -Console
-        return $false
-    }
-}
-
-<#
-.SYNOPSIS
-    Sets a registry value with comprehensive error handling and OS-specific validation.
-    
-.DESCRIPTION
-    Creates or updates a registry value with proper error handling, prerequisite checking,
-    and OS-specific path validation.
-#>
 function Set-RegistryValue {
     [CmdletBinding()]
     param(
@@ -641,14 +575,8 @@ function Set-RegistryValue {
     }
 }
 
-#endregion
-
 #region Pre-flight Checks
 
-<#
-.SYNOPSIS
-    Performs pre-flight checks before script execution.
-#>
 function Test-Prerequisites {
     [CmdletBinding()]
     param()
@@ -723,17 +651,13 @@ function Test-Prerequisites {
 
 #region Core Hardening Functions
 
-<#
-.SYNOPSIS
-    Initializes the script context and downloads required files.
-#>
 function Initialize-Context {
     [CmdletBinding()]
     param()
     
     Invoke-HardeningOperation -OperationName "Initialize Context" -ScriptBlock {
         # Download needed files
-        $neededFiles = @($portsFile, $advancedAuditingFile, $patchURLFile)
+        $neededFiles = @($portsFile, $advancedAuditingFile, $patchURLFile, $wordlistFileName)
         foreach ($file in $neededFiles) {
             $filename = $(Split-Path -Path $file -Leaf)
             if (-not (Test-Path "$pwd\$filename")) {
@@ -792,12 +716,6 @@ function Initialize-Context {
     }
 }
 
-<#
-.SYNOPSIS
-    Initializes the system by setting up logging and context.
-    This function combines Initialize-Log and Initialize-Context to ensure
-    proper system initialization before running hardening operations.
-#>
 function Initialize-System {
     [CmdletBinding()]
     param()
@@ -807,7 +725,7 @@ function Initialize-System {
     try {
         # Initialize function execution log
         Initialize-Log
-        
+        Initialize-Logging
         # Initialize context (downloads files, sets variables)
         Initialize-Context
         
@@ -821,116 +739,157 @@ function Initialize-System {
 
 <#
 .SYNOPSIS
-    Generates a random password.
+    Generates a deterministic password based on secret and username using wordlist.
+    
+.DESCRIPTION
+    Generates a passphrase by combining a secret and username (prompted from user),
+    hashing them with MD5, and using the hash to select words from a wordlist.
+    The result is a deterministic password that can be regenerated using the same inputs.
+    The function downloads the wordlist if it doesn't exist locally.
 #>
 function GeneratePassword {
     [CmdletBinding()]
-    param()
+    param(
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$targetUsername
+    )
     
     try {
-        $PasswordLength = 10
-        $CharacterSet = @{
-            Uppercase   = (97..122) | Get-Random -Count 10 | % {[char]$_}
-            Lowercase   = (65..90)  | Get-Random -Count 10 | % {[char]$_}
-            Numeric     = (48..57)  | Get-Random -Count 10 | % {[char]$_}
-            SpecialChar = (33..47)+(58..64)+(91..96)+(123..126) | Get-Random -Count 10 | % {[char]$_}
+        # Helper function to scale hash values to wordlist indices
+        function Scale-HashValue {
+            param(
+                [Parameter(Mandatory=$true)]
+                [int]$HashValue,
+                
+                [Parameter(Mandatory=$true)]
+                [int]$WordlistCount
+            )
+            
+            $MIN_HASH = 0x0000
+            $MAX_HASH = 0xFFFF
+            $TARGET_MIN = 0
+            
+            if ($WordlistCount -eq 0) { 
+                return 0 
+            }
+            
+            return [int](((($WordlistCount - $TARGET_MIN) * ($HashValue - $MIN_HASH)) / ($MAX_HASH - $MIN_HASH)) + $TARGET_MIN)
         }
-        $StringSet = $CharacterSet.Uppercase + $CharacterSet.Lowercase + $CharacterSet.Numeric + $CharacterSet.SpecialChar
-        $password = -join(Get-Random -Count $PasswordLength -InputObject $StringSet)
-        return $password
+
+        
+        # Load wordlist data
+        if (Test-Path ".\wordlist.txt") {
+          [string[]]$wordlistData = Get-Content -Path ".\wordlist.txt"
+            Write-Log -Level "INFO" -Message "Loaded $($wordlistData.Count) words from wordlist.txt"
+        } else {
+            Write-Log -Level "ERROR" -Message "wordlist.txt not found"
+            throw "wordlist.txt not found"
+        }
+        
+        #Generate a cryptographically random salt phrase
+        $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
+        $saltPhraseWords = @()
+        while ($saltPhraseWords.Count -lt $passwordWordCount) {
+            # Generate 4 cryptographically random bytes
+            $buffer = [byte[]]::new(4)
+            $rng.GetBytes($buffer)
+            
+            # Convert the bytes to an integer and use the modulo operator to get a valid index
+            # This method safely translates the CSPRNG's output into a wordlist index
+            $RandomIndex = [System.BitConverter]::ToInt32($buffer, 0) % $wordlistData.Count
+            
+            $saltPhraseWords += $wordlistData[$RandomIndex]
+        }
+
+        # 4. Concatenate the words to create the final salt phrase
+        $saltPhrase = $saltPhraseWords -join '-'
+        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
+        
+        # Calculate MD5 hash from secret and username
+        $inputString = "$saltPhrase$targetUsername"
+        $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($inputString))
+        $md5HashString = [System.BitConverter]::ToString($hashBytes) -replace '-'
+        
+        # Determine indices and generate passphrase
+        $generatedPasswordWords = @()
+        $wordIndices = @()
+        
+        # Process hash in 4-character segments
+        for ($i = 0; $i -lt $md5HashString.Length; $i += 4) {
+            if ($i + 4 -le $md5HashString.Length) {
+                $hashSegment = $md5HashString.Substring($i, 4)
+                $intValue = [Convert]::ToInt32($hashSegment, 16)
+                
+                $scaledIndex = Scale-HashValue -HashValue $intValue -WordlistCount $wordlistData.Count
+                $wordIndices += $scaledIndex
+            }
+        }
+        
+        # Generate password words from indices
+        for ($i = 0; $i -lt $passwordWordCount; $i++) {
+            if ($i -lt $wordIndices.Count) {
+                $generatedPasswordWords += $wordlistData[$wordIndices[$i]]
+            } else {
+                Write-Warning "Not enough hash segments to generate $passwordWordCount words."
+                Write-Log -Level "WARNING" -Message "Not enough hash segments to generate $passwordWordCount words"
+                break
+            }
+        }
+        
+        # Join words with hyphens to create final password
+        $generatedPassword = $generatedPasswordWords -join '-'
+        
+        # Save the salts to a file
+        $saltFile = ".\salt.txt"
+        if (-not (Test-Path $saltFile)) {
+            # Create the file and add a header
+            Add-Content -Path $saltFile -Value "Username,Salt"
+        }
+
+        $content = "$($targetUsername),$($saltPhrase)"
+        Add-Content -Path $saltFile -Value $content
+
+        Write-Host "salt.txt has been updated with the new salt for $targetUsername" -ForegroundColor Green
+        Write-Log -Level "SUCCESS" -Message "salt.txt has been updated with the new salt for $targetUsername"
+        return $generatedPassword
+        
     } catch {
-        Write-Log -Level "ERROR" -Message "Password generation failed: $($_.Exception.Message)"
+        $errorMessage = "Password generation failed: $($_.Exception.Message)"
+        Write-Error $errorMessage
+        Write-Log -Level "ERROR" -Message $errorMessage
         throw
     }
 }
 
-<#
-.SYNOPSIS
-    Disables users with confirmation prompt.
-#>
+
 function Change-Passwords {
     [CmdletBinding()]
     param()
     
-    Invoke-HardeningOperation -OperationName "Change Passwords" -ScriptBlock {
-        # TODO: Future implementation
-        # This function is reserved for password change functionality
-        Write-Host "Change Passwords function - To be implemented" -ForegroundColor Yellow
-        Write-Log -Level "INFO" -Message "Change Passwords function called - not yet implemented"
+    try {
+        $userList = Get-LocalUser | Where-Object { $_.Name -like $Filter } | Select-Object -ExpandProperty Name
+
+        Write-Log -Level "INFO" -Message "Starting password change process for $($userList.Count) local (non-AD) users"
+        foreach ($username in $userList) {
+            $newPassword = GeneratePassword -targetUsername $username
+            
+            Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
+
+            
+            Write-Log -Level "SUCCESS" -Message "Successfully reset password for local user $username"
+        }
+        
+        Write-Log -Level "INFO" -Message "Password change process complete"
+
+    } catch {
+        $errorMessage = "Password change process failed: $($_.Exception.Message)"
+        Write-Error $errorMessage
+        Write-Log -Level "ERROR" -Message $errorMessage
+        throw
     }
 }
 
-<#
-.SYNOPSIS
-    Prompts user to set a password for a local user.
-#>
-function Get-Set-Password {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$user
-    )
-    
-    try {
-        # Verify user exists first
-        $localUser = Get-LocalUser -Name $user        
-        $pw = Read-Host -AsSecureString -Prompt "New password for '$user'?"
-        $conf = Read-Host -AsSecureString -Prompt "Confirm password"
-        
-        # Convert SecureString to plain text for comparison
-        $pwPlainText = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw))
-        $confPlainText = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($conf))
-        
-        if ($pwPlainText -eq $confPlainText -and $pwPlainText -ne "") {
-            # Attempt to set the password
-            try {
-                $securePassword = ConvertTo-SecureString -AsPlainText $pwPlainText -Force
-                $localUser | Set-LocalUser -Password $securePassword                
-                # Verify the password was actually changed by attempting to read user again
-                # (This is a basic verification - the Set-LocalUser should throw if it fails)
-                $verifyUser = Get-LocalUser -Name $user                
-                Write-Host "[SUCCESS] Password updated for user: $user" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Password updated for user: $user"
-                
-                # Clear the plaintext passwords from memory
-                $pwPlainText = $null
-                $confPlainText = $null
-                $securePassword = $null
-                [System.GC]::Collect()
-                $pw.Dispose()
-                $conf.Dispose()
-                return $true
-            } catch {
-                Write-Host "[FAILED] Could not update password for $user - $($_.Exception.Message)" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "Failed to update password for $($user): $($_.Exception.Message)"
-                
-                # Clear the plaintext passwords from memory
-                $pwPlainText = $null
-                $confPlainText = $null
-                [System.GC]::Collect()
-                $pw.Dispose()
-                $conf.Dispose()
-                return $false
-            }
-        } else {
-            Write-Host "[FAILED] Either the passwords didn't match, or you typed nothing" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "Password confirmation failed for user: $user"
-            
-            # Clear the plaintext passwords from memory
-            $pwPlainText = $null
-            $confPlainText = $null
-            [System.GC]::Collect()
-            $pw.Dispose()
-            $conf.Dispose()
-            return $false
-        }
-    } catch {
-        Write-Host "[FAILED] Error with password submission for $($user): $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "Please try again...`n" -ForegroundColor Yellow
-        Write-Log -Level "ERROR" -Message "Error in Get-Set-Password for $($user): $($_.Exception.Message)"
-        return $false
-    }
-}
 
 <#
 .SYNOPSIS
@@ -1962,8 +1921,6 @@ try {
     Write-Host ""
 }
 
-# Initialize logging
-Initialize-Logging
 
 # Perform pre-flight checks
 try {
@@ -1974,8 +1931,6 @@ try {
     exit 1
 }
 
-# Initialize function log
-Initialize-Log
 
 # Main execution loop
 while ($true) {
