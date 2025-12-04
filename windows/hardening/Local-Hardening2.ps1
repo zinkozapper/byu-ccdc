@@ -108,17 +108,7 @@ $script:log = @{}
 
 #region OS Detection Functions
 
-<#
-.SYNOPSIS
-    Detects and identifies the Windows operating system version.
-    
-.DESCRIPTION
-    Uses WMI/CIM to detect the OS version, build number, edition, and whether it's a Server or Client OS.
-    Also detects Server Core installations.
-    
-.OUTPUTS
-    PSCustomObject with OS information
-#>
+
 function Get-OperatingSystemInfo {
     [CmdletBinding()]
     param()
@@ -327,12 +317,8 @@ function Write-Log {
     Updates the operation tracking log.
 #>
 function Update-Log {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true)]
         [string]$key,
-        
-        [Parameter(Mandatory=$true)]
         [string]$value
     )
     $script:log[$key] = $value
@@ -343,11 +329,8 @@ function Update-Log {
     Initializes the function execution log.
 #>
 function Initialize-Log {
-    [CmdletBinding()]
-    param()
-    
     foreach ($func in $functionNames) {
-        Update-Log -key $func -value "Not executed"
+        Update-Log $func "Not executed"
     }
 }
 
@@ -356,9 +339,6 @@ function Initialize-Log {
     Prints the execution summary log.
 #>
 function Print-Log {
-    [CmdletBinding()]
-    param()
-    
     Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
     Write-Host "### Script Execution Summary ###" -ForegroundColor Green
     Write-Host ("=" * 60) -ForegroundColor Cyan
@@ -764,13 +744,7 @@ function Test-Prerequisites {
 
 #endregion
 
-#region Utility Functions
-
-<#
-.SYNOPSIS
-    Helper function to create a competition user with validation.
-    Verifies user creation and handles common error scenarios.
-#>
+#region Core Hardening Functions
 
 <#
 .SYNOPSIS
@@ -894,84 +868,6 @@ function GeneratePassword {
 
 <#
 .SYNOPSIS
-    Disables all local users except competition users and optionally additional specified users.
-#>
-function Disable-AllUsers {
-    [CmdletBinding()]
-    param()
-    
-    try {
-        Write-Host "Mass Disable Users" -ForegroundColor Cyan
-        
-        # Check if UserArray has been populated (from Add Competition Users)
-        if ($null -eq $script:UserArray -or $script:UserArray.Count -eq 0) {
-            Write-Host "[FAILED] Competition users not defined. Run 'Add Competition Users' first." -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "UserArray not populated for mass disable users"
-            return
-        }
-        
-        # Use competition users from UserArray
-        $competitionUsers = $script:UserArray
-        
-        Write-Host "`nCompetition users that will be KEPT ENABLED:" -ForegroundColor Yellow
-        $competitionUsers | ForEach-Object { Write-Host "  - $_" }
-        
-        # Get all local users
-        $allLocalUsers = Get-LocalUser
-        
-        # Find users that are NOT in competition list
-        $usersToDisable = $allLocalUsers | Where-Object { $_.Name -notin $competitionUsers }
-        
-        if ($usersToDisable.Count -eq 0) {
-            Write-Host "`nNo additional users to disable." -ForegroundColor Green
-            return
-        }
-        
-        Write-Host "`nThe following users will be disabled:" -ForegroundColor Yellow
-        $usersToDisable | ForEach-Object { Write-Host "  - $($_.Name)" }
-        
-        # Prompt for additional users to keep enabled
-        $keepAdditional = Read-Host "`nDo you want to keep any additional users enabled? (y/n)"
-        
-        $usersToKeep = @()
-        if ($keepAdditional -eq "y") {
-            Write-Host "`nEnter usernames to keep enabled (one per line, blank line to finish):"
-            do {
-                $username = Read-Host
-                if ($username -ne "") {
-                    $usersToKeep += $username
-                }
-            } while ($username -ne "")
-        }
-        
-        # Disable users not in competition list or keep list
-        foreach ($user in $usersToDisable) {
-            if ($user.Name -notin $usersToKeep) {
-                try {
-                    Disable-LocalUser -Name $user.Name
-                    Write-Host "[SUCCESS] Disabled user: $($user.Name)" -ForegroundColor Green
-                    Write-Log -Level "SUCCESS" -Message "Disabled user: $($user.Name)"
-                } catch {
-                    Write-Host "[FAILED] Could not disable user $($user.Name): $($_.Exception.Message)" -ForegroundColor Red
-                    Write-Log -Level "ERROR" -Message "Could not disable user $($user.Name): $($_.Exception.Message)"
-                }
-            } else {
-                Write-Host "[SKIPPED] Keeping user enabled: $($user.Name)" -ForegroundColor Cyan
-                Write-Log -Level "INFO" -Message "Keeping user enabled: $($user.Name)"
-            }
-        }
-        
-        Write-Host "`nMass disable users completed" -ForegroundColor Green
-        Write-Log -Level "SUCCESS" -Message "Mass disable users completed"
-    } catch {
-        Write-Host "[FAILED] Mass disable users failed: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Log -Level "ERROR" -Message "Failed to disable users: $($_.Exception.Message)"
-        throw
-    }
-}
-
-<#
-.SYNOPSIS
     Disables users with confirmation prompt.
 #>
 function Change-Passwords {
@@ -1060,48 +956,42 @@ function Get-Set-Password {
 
 <#
 .SYNOPSIS
-    Helper function to create a competition user with validation.
-    Verifies user creation and handles common error scenarios.
+    Adds competition-specific users with certain privileges.
+    Prompts user directly for 2 users (username and password for each).
 #>
+## Helper Function for Competition User Creation
+# This function must be defined outside the Invoke-HardeningOperation script block
+# and preferably outside the main function itself for proper scope.
+## 1. Helper Function Definition (MUST be outside the main script block)
 function New-CompetitionUser {
-    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true)]
         [string]$Username,
-        
-        [Parameter(Mandatory=$true)]
         [System.Security.SecureString]$Password,
-        
-        [Parameter(Mandatory=$true)]
         [int]$UserNumber,
-        
-        [Parameter(Mandatory=$false)]
         [bool]$IsFirstUser = $false
     )
     
     $userCreated = $false
     
-    $userCreated = $false
-    
     # Validate username is not empty
     if ([string]::IsNullOrWhiteSpace($Username)) {
-        Write-Host "✗ Failed to create user $UserNumber: Username cannot be empty" -ForegroundColor Red
-        Write-Log -Level "ERROR" -Message "User $UserNumber username is empty"
+        Write-Host "Failed to create user ${Username}: Username cannot be empty" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "User ${Username} username is empty"
         return $false
     }
-    
+            
     # Check if user already exists
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
     if ($existingUser) {
-        Write-Host "✓ User $Username already exists (skipping creation)" -ForegroundColor Yellow
-        Write-Log -Level "WARNING" -Message "User '$Username' already exists"
+        Write-Host "✓ User ${Username} already exists (skipping creation)" -ForegroundColor Yellow
+        Write-Log -Level "WARNING" -Message "User ${Username} already exists"
         $userCreated = $true
     } else {
         # Validate password is not empty
         $passwordLength = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)).Length
         if ($passwordLength -eq 0) {
-            Write-Host "✗ Failed to create user $Username: Password cannot be empty" -ForegroundColor Red
-            Write-Log -Level "ERROR" -Message "User $Username password is empty"
+            Write-Host "Failed to create user ${Username}: Password cannot be empty" -ForegroundColor Red
+            Write-Log -Level "ERROR" -Message "User ${Username} password is empty"
             return $false
         }
         
@@ -1114,35 +1004,35 @@ function New-CompetitionUser {
             New-LocalUser @splat -ErrorAction Stop
             
             # Verify user was actually created
-            Start-Sleep -Milliseconds 500  # Brief delay to ensure user is fully created
+            Start-Sleep -Milliseconds 500
             $verifyUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
             
             if ($verifyUser) {
-                Write-Host "✓ User $Username created successfully" -ForegroundColor Green
-                Write-Log -Level "SUCCESS" -Message "Created user: $Username"
+                Write-Host "User ${Username} created successfully" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Created user: ${Username}"
                 $userCreated = $true
             } else {
-                Write-Host "✗ Failed to create user $Username: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
-                Write-Log -Level "ERROR" -Message "User creation verification failed for: $Username"
+                Write-Host "Failed to create user ${Username}: User creation appeared to succeed but user was not found in system" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message "User creation verification failed for: ${Username}"
                 return $false
             }
         } catch {
             $errorMessage = $_.Exception.Message
             
-            # Provide more specific error messages for common failures
+            # ... (Error handling logic remains the same) ...
             if ($errorMessage -match "already exists" -or $errorMessage -match "The account already exists") {
-                Write-Host "✗ Failed to create user $Username: Username already exists" -ForegroundColor Red
+                Write-Host "Failed to create user ${Username}: Username already exists" -ForegroundColor Red
             } elseif ($errorMessage -match "password" -or $errorMessage -match "complexity" -or $errorMessage -match "requirements") {
-                Write-Host "✗ Failed to create user $Username: Password does not meet complexity requirements" -ForegroundColor Red
+                Write-Host "Failed to create user ${Username}: Password does not meet complexity requirements" -ForegroundColor Red
             } elseif ($errorMessage -match "permission" -or $errorMessage -match "access denied" -or $errorMessage -match "unauthorized") {
-                Write-Host "✗ Failed to create user $Username: Insufficient permissions to create user" -ForegroundColor Red
+                Write-Host "Failed to create user ${Username}: Insufficient permissions to create user" -ForegroundColor Red
             } elseif ($errorMessage -match "invalid" -or $errorMessage -match "format") {
-                Write-Host "✗ Failed to create user $Username: Invalid username format" -ForegroundColor Red
+                Write-Host "Failed to create user ${Username}: Invalid username format" -ForegroundColor Red
             } else {
-                Write-Host "✗ Failed to create user $Username: $errorMessage" -ForegroundColor Red
+                Write-Host "Failed to create user ${Username}: $errorMessage" -ForegroundColor Red
             }
             
-            Write-Log -Level "ERROR" -Message "Failed to create user '$Username': $errorMessage"
+            Write-Log -Level "ERROR" -Message "Failed to create user '${Username}': $errorMessage"
             return $false
         }
     }
@@ -1153,13 +1043,13 @@ function New-CompetitionUser {
             if ($IsFirstUser) {
                 Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
                 Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                Write-Log -Level "SUCCESS" -Message "Added $Username to Administrators and Remote Desktop Users groups"
+                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Administrators and Remote Desktop Users groups"
             } else {
                 Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
-                Write-Log -Level "SUCCESS" -Message "Added $Username to Remote Desktop Users group"
+                Write-Log -Level "SUCCESS" -Message "Added ${Username} to Remote Desktop Users group"
             }
         } catch {
-            Write-Log -Level "WARNING" -Message "Could not add $Username to groups: $($_.Exception.Message)"
+            Write-Log -Level "WARNING" -Message "Could not add ${Username} to groups: $($_.Exception.Message)"
         }
         
         # Add to UserArray
@@ -1170,11 +1060,8 @@ function New-CompetitionUser {
     return $false
 }
 
-<#
-.SYNOPSIS
-    Adds competition-specific users with certain privileges.
-    Prompts user directly for 2 users (username and password for each).
-#>
+## 2. Main Function Definition (Uses the Helper Function)
+
 function Add-Competition-Users {
     [CmdletBinding()]
     param()
@@ -1184,6 +1071,8 @@ function Add-Competition-Users {
         [string[]]$script:UserArray = @()
         $successCount = 0
         $totalUsers = 2
+        
+        # NOTE: New-CompetitionUser is now callable here because it was defined previously.
         
         # Prompt for and create User 1
         $user1Name = Read-Host "Enter username for user 1"
@@ -1206,6 +1095,7 @@ function Add-Competition-Users {
         
         # Export user permissions to file
         if ($script:UserArray.Count -gt 0) {
+            # NOTE: Print-Users must also be defined externally or its definition must be removed.
             $userOutput = Print-Users
             if ($userOutput -ne $null) {
                 $outputText = $userOutput -join "`n`n"
@@ -1366,10 +1256,6 @@ function Get-Comma-Separated-List {
         return @()
     }
 }
-
-#endregion
-
-#region Core Hardening Functions
 
 <#
 .SYNOPSIS
@@ -1829,6 +1715,7 @@ function Quick-Harden {
         
         Write-Host "`n=== QUICK HARDENING COMPLETED ===" -ForegroundColor Green
         Write-Host "Essential hardening steps have been completed successfully!" -ForegroundColor Green
+        Write-Host "Please Run Windows Updates now! It might take a while." -ForegroundColor Yellow
     }
 }
 
@@ -2263,14 +2150,7 @@ function Run-Windows-Updates {
 .SYNOPSIS
     Displays the main menu.
 #>
-<#
-.SYNOPSIS
-    Displays the main menu for script operations.
-#>
 function Show-Main-Menu {
-    [CmdletBinding()]
-    param()
-    
     Clear-Host
     Write-Host "`n==== Local Windows Hardening Menu ====" -ForegroundColor Green
     Write-Host "Prerequisites:"
@@ -2295,123 +2175,6 @@ function Show-Main-Menu {
     Write-Host " 14) Set Execution Policy to Restricted" #10
 }
 
-<#
-.SYNOPSIS
-    Runs all hardening functions with original flow.
-#>
-function Run-All {
-    [CmdletBinding()]
-    param()
-    
-    Initialize-Log
-    Initialize-Context
-    
-    $confirmation = Prompt-Yes-No -Message "Change passwords? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Changing passwords***" -ForegroundColor Magenta
-        Change-Passwords 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Add Competition Users' function? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta
-        Add-Competition-Users 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Remove users from RDP group except $($script:UserArray[0]) and $($script:UserArray[1])' function? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Removing every user from RDP group except $($script:UserArray[0]) and $($script:UserArray[1])...***" -ForegroundColor Magenta
-        Remove-RDP-Users 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Configure Firewall' function? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Configuring firewall***" -ForegroundColor Magenta
-        Configure-Firewall 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Disable unnecessary services (NetBIOS over TCP/IP, IPv6, closed port services)' function? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Disabling unnecessary services***" -ForegroundColor Magenta
-        Disable-Unnecessary-Services 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    Write-Host "`n***Enabling advanced auditing***" -ForegroundColor Magenta
-    if (Test-Path ".\advancedAuditing.ps1") {
-        try {
-            & .\advancedAuditing.ps1
-            Update-Log "Enable Advanced Auditing" "Executed successfully"
-            Write-Log -Level "SUCCESS" -Message "Advanced auditing script executed"
-        } catch {
-            Update-Log "Enable Advanced Auditing" "Failed with error: $($_.Exception.Message)"
-            Write-Log -Level "ERROR" -Message "Advanced auditing script failed: $($_.Exception.Message)"
-        }
-    } else {
-        Write-Host "advancedAuditing.ps1 not found, skipping..." -ForegroundColor Yellow
-        Update-Log "Enable Advanced Auditing" "Skipped - file not found"
-        Write-Log -Level "WARNING" -Message "advancedAuditing.ps1 not found"
-    }
-    
-    Write-Host "Enabling Firewall logging successful and blocked connections" -ForegroundColor Green
-    try {
-        Set-NetFirewallProfile -Profile Domain,Public,Private -LogAllowed True -LogBlocked True
-        Write-Log -Level "SUCCESS" -Message "Enabled firewall logging"
-    } catch {
-        Write-Log -Level "WARNING" -Message "Could not enable firewall logging: $($_.Exception.Message)"
-    }
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Configure Splunk' function? (y/n)"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Configuring Splunk***" -ForegroundColor Magenta
-        $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
-        $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
-        Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    Write-Host "`n***Installing EternalBlue Patch***" -ForegroundColor Magenta
-    Install-EternalBluePatch
-    
-    Write-Host "`n***Upgrading SMB***" -ForegroundColor Magenta
-    Upgrade-SMB
-    
-    Write-Host "`n***Patching Mimikatz***" -ForegroundColor Magenta
-    Patch-Mimikatz
-    
-    $confirmation = Prompt-Yes-No -Message "Enter the 'Run Windows Updates' function? (y/n) This might take a while"
-    if ($confirmation.toLower() -eq "y") { 
-        Write-Host "`n***Running Windows Updater***" -ForegroundColor Magenta
-        Run-Windows-Updates 
-    } else { 
-        Write-Host "Skipping..." -ForegroundColor Red 
-    }
-    
-    
-    Write-Host "***Setting Execution Policy back to Restricted***" -ForegroundColor Red
-    try {
-        Set-ExecutionPolicy Restricted -Scope Process -Force        Update-Log "Set Execution Policy" "Executed successfully"
-        Write-Log -Level "SUCCESS" -Message "Set execution policy to Restricted"
-    } catch {
-        Update-Log "Set Execution Policy" "Failed with error: $($_.Exception.Message)"
-        Write-Log -Level "ERROR" -Message "Could not set execution policy: $($_.Exception.Message)"
-    }
-    
-    Write-Host "`n***Script Completed!!!***" -ForegroundColor Green
-    Print-Log
-}
-
-#endregion
 
 #region Main Script Execution
 
