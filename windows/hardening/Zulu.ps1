@@ -40,8 +40,8 @@ function Scale-Value {
 # --- Main Logic ---
 
 # 1. Get User Input
-$secret = Read-Host 'Enter a base secret from the password sheet'
-$user = Read-Host 'Enter a username'
+$user = Read-Host 'Enter a username:'
+$secret = Read-Host 'Enter a salt you were given when you ran the script:'
 
 # 2. Calculate MD5 Hash (Using System.Text.Encoding for brevity)
 $inputString = "$secret$user"
@@ -71,7 +71,7 @@ for ($i = 0; $i -lt $NUM_WORDS; $i++) {
 }
 
 # 4. Print Result
-$password = $passwordWords -join '-'
+$password = $passwordWords -join '5-'
 Write-Host ""
 Write-Host "Generated Passphrase:" -ForegroundColor Green
 Write-Host $password
