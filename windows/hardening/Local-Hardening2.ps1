@@ -869,9 +869,7 @@ function Change-Passwords {
 
         Write-Log -Level "INFO" -Message "Starting password change process for $($userList.Count) local (non-AD) users"
         foreach ($username in $userList) {
-            $newPassword = GeneratePassword -targetUsername $username
-            
-            Write-Host "$newPassword"
+            $newPassword = GeneratePassword -targetUsername $username            
             Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
 
             Write-Host "[SUCCESS] reset password for local user $username" -ForegroundColor Green
