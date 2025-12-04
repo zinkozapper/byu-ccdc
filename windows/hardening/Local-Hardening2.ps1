@@ -800,7 +800,7 @@ function GeneratePassword {
         }
 
         # 4. Concatenate the words to create the final salt phrase
-        $saltPhrase = $saltPhraseWords -join '5-'
+        $saltPhrase = $saltPhraseWords -join '-'
         Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
         
         # Calculate MD5 hash from secret and username
@@ -835,7 +835,7 @@ function GeneratePassword {
         }
         
         # Join words with hyphens to create final password
-        $generatedPassword = $generatedPasswordWords -join '-'
+        $generatedPassword = $generatedPasswordWords -join '5-'
         
         # Save the salts to a file
         $saltFile = ".\salt.txt"
