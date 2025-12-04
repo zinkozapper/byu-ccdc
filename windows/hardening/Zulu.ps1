@@ -10,7 +10,7 @@ if (-not (Test-Path $wordlistPath)) {
         Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$wordlistName" -OutFile $wordlistPath
         Write-Host "Downloaded $wordlistName successfully." -ForegroundColor Green
     } catch {
-        Write-Error "Failed to download $wordlistName: $($_.Exception.Message)"
+        Write-Error "Failed to download ${wordlistName}: $($_.Exception.Message)"
         exit 1
     }
 } else {
