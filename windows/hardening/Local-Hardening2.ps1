@@ -876,15 +876,15 @@ function Change-Passwords {
             
             Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
 
-            
+            Write-Host "[SUCCESS] reset password for local user $username" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Successfully reset password for local user $username"
         }
         
         Write-Log -Level "INFO" -Message "Password change process complete"
 
     } catch {
-        $errorMessage = "Password change process failed: $($_.Exception.Message)"
-        Write-Error $errorMessage
+        Write-Host "[FAILED] User Password reset failed: $($_.Exception.Message)" -ForegroundColor Red
+
         Write-Log -Level "ERROR" -Message $errorMessage
         throw
     }
