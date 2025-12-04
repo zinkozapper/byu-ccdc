@@ -1,55 +1,20 @@
 $NUM_WORDS = 5
 $wordlistName = "wordlist.txt"
-$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/zinkozapper/byu-ccdc/main/windows/hardening/"
+$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/zinkozapper/byu-ccdc/main/windows/hardening"
 $wordlistPath = ".\$wordlistName"
 
-function Get-Wordlist {
-    [CmdletBinding()]
-    param()
-    
-    $downloadUri = "$ccdcRepoWindowsHardeningPath/$wordlistName"
-    
-    if (-not (Test-Path $wordlistPath)) {
-        Write-Host "Downloading $wordlistName..." -ForegroundColor Cyan
-        try {
-            # Note: Using the raw file link to ensure a proper download
-            Invoke-WebRequest -Uri $downloadUri -OutFile $wordlistPath              
-            Write-Host "Downloaded $wordlistName successfully." -ForegroundColor Green
-        } catch {
-            Write-Error "Failed to download $wordlistName : $($_.Exception.Message)"
-            throw "Failed to download required file: $wordlistName"
-        }
-    } else {
-        Write-Host "File already exists: $wordlistName" -ForegroundColor Yellow
-    }
-}
-
-function Scale-Value {
-    param(
-        [Parameter(Mandatory=$true)]
-        [int]$x
-    )
-    $MIN = 0x0000
-    $MAX = 0xFFFF
-    
-    $TARGET_MAX = $wordlistData.Count
-    $TARGET_MIN = 0
-    
-    if ($TARGET_MAX -eq 0) {
-        Write-Error "Wordlist data is empty, cannot scale."
-        return 0
-    }
-
-    return [int](((($TARGET_MAX - $TARGET_MIN) * ($x - $MIN)) / ($MAX - $MIN)) + $TARGET_MIN)
-}
-
-# 1. Ensure the wordlist file exists by attempting to download it
-Get-Wordlist
-
-# 2. Load the Wordlist into a global variable
+# --- Wordlist Loading and Downloading ---
 if (-not (Test-Path $wordlistPath)) {
-    Write-Error "The wordlist file '$wordlistPath' was not found after attempt to download."
-    exit 1
+    Write-Host "Downloading $wordlistName..." -ForegroundColor Cyan
+    try {
+        Invoke-WebRequest -Uri "$ccdcRepoWindowsHardeningPath/$wordlistName" -OutFile $wordlistPath
+        Write-Host "Downloaded $wordlistName successfully." -ForegroundColor Green
+    } catch {
+        Write-Error "Failed to download $wordlistName: $($_.Exception.Message)"
+        exit 1
+    }
+} else {
+    Write-Host "File already exists: $wordlistName" -ForegroundColor Yellow
 }
 
 $wordlistData = (Get-Content -Path $wordlistPath -Raw) -split "`n" | Where-Object { $_ -ne "" }
@@ -59,48 +24,54 @@ if ($wordlistData.Count -eq 0) {
     exit 1
 }
 
-# 3. Get User Input
+# --- Scale Function ---
+function Scale-Value {
+    param([Parameter(Mandatory=$true)][int]$x)
+    $MIN = 0x0000
+    $MAX = 0xFFFF
+    $TARGET_MAX = $wordlistData.Count
+    $TARGET_MIN = 0
+    
+    if ($TARGET_MAX -eq 0) { return 0 } 
+
+    return [int](((($TARGET_MAX - $TARGET_MIN) * ($x - $MIN)) / ($MAX - $MIN)) + $TARGET_MIN)
+}
+
+# --- Main Logic ---
+
+# 1. Get User Input
 $secret = Read-Host 'Enter a base secret from the password sheet'
 $user = Read-Host 'Enter a username'
 
-# 4. Calculate MD5 Hash
+# 2. Calculate MD5 Hash (Using System.Text.Encoding for brevity)
 $inputString = "$secret$user"
-$md5 = [System.Security.Cryptography.MD5]::Create()
-$inputBytes = [System.Text.Encoding]::UTF8.GetBytes($inputString)
-$hashBytes = $md5.ComputeHash($inputBytes)
+$hash = [System.BitConverter]::ToString(([System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($inputString)))) -replace '-'
 
-$hash = -join ($hashBytes | ForEach-Object { $_.ToString('x2') })
-
-# 5. Determine Indices
+# 3. Determine Indices and Generate Passphrase
+$passwordWords = @()
 $indices = @()
-$hashLength = $hash.Length
 
-for ($i = 0; $i -lt $hashLength; $i += 4) {
-    if ($i + 4 -le $hashLength) {
+for ($i = 0; $i -lt $hash.Length; $i += 4) {
+    if ($i + 4 -le $hash.Length) {
         $hashSegment = $hash.Substring($i, 4)
         $intValue = [Convert]::ToInt32($hashSegment, 16)
+        
         $index = Scale-Value -x $intValue
         $indices += $index
     }
 }
 
-# 6. Generate Passphrase
-$passwordWords = @()
-
 for ($i = 0; $i -lt $NUM_WORDS; $i++) {
     if ($i -lt $indices.Count) {
-        $index = $indices[$i]
-        
-        $passwordWords += $wordlistData[$index]
+        $passwordWords += $wordlistData[$indices[$i]]
     } else {
         Write-Warning "Not enough hash segments to generate $NUM_WORDS words."
         break
     }
 }
 
-$password = $passwordWords -join '.'
-
-# 7. Print Result
+# 4. Print Result
+$password = $passwordWords -join '-'
 Write-Host ""
 Write-Host "Generated Passphrase:" -ForegroundColor Green
 Write-Host $password
