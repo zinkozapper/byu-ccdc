@@ -226,10 +226,7 @@ function Get-OperatingSystemInfo {
 
 #region Logging Functions
 
-<#
-.SYNOPSIS
-    Initializes the logging system.
-#>
+
 function Initialize-Logging {
     [CmdletBinding()]
     param()
@@ -783,7 +780,7 @@ function GeneratePassword {
           [string[]]$wordlistData = Get-Content -Path ".\wordlist.txt"
             Write-Log -Level "INFO" -Message "Loaded $($wordlistData.Count) words from wordlist.txt"
         } else {
-            Write-Log -Level "ERROR" -Message "wordlist.txt not found"
+            Write-Log -Level "ERROR" -Message "wordlist.txt not found. Please Initialize Context first!"
             throw "wordlist.txt not found"
         }
         
@@ -868,7 +865,7 @@ function Change-Passwords {
     param()
     
     try {
-        $userList = Get-LocalUser | Where-Object { $_.Name -like $Filter } | Select-Object -ExpandProperty Name
+        $userList = Get-LocalUser | Select-Object -ExpandProperty Name
 
         Write-Log -Level "INFO" -Message "Starting password change process for $($userList.Count) local (non-AD) users"
         foreach ($username in $userList) {
