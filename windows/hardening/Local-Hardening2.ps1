@@ -800,7 +800,7 @@ function GeneratePassword {
         }
 
         # 4. Concatenate the words to create the final salt phrase
-        $saltPhrase = $saltPhraseWords -join '-'
+        $saltPhrase = $saltPhraseWords -join '5-'
         Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
         
         # Calculate MD5 hash from secret and username
@@ -871,6 +871,7 @@ function Change-Passwords {
         foreach ($username in $userList) {
             $newPassword = GeneratePassword -targetUsername $username
             
+            Write-Host "$newPassword"
             Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
 
             Write-Host "[SUCCESS] reset password for local user $username" -ForegroundColor Green
