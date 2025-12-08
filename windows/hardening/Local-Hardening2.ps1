@@ -744,71 +744,104 @@ function Initialize-System {
     The result is a deterministic password that can be regenerated using the same inputs.
     The function downloads the wordlist if it doesn't exist locally.
 #>
+
+# Helper to load wordlist securely once.
+function Get-WordlistData {
+    [CmdletBinding()]
+    param()
+    if (Test-Path ".\wordlist.txt") {
+        [string[]]$wordlistData = Get-Content -Path ".\wordlist.txt"
+        Write-Log -Level "INFO" -Message "Loaded $($wordlistData.Count) words from wordlist.txt"
+        return $wordlistData
+    } else {
+        Write-Log -Level "ERROR" -Message "wordlist.txt not found. Please Initialize Context first!"
+        throw "wordlist.txt not found"
+    }
+}
+
+# Helper function to scale hash values to wordlist indices
+function Scale-HashValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [int]$HashValue,
+        
+        [Parameter(Mandatory=$true)]
+        [int]$WordlistCount
+    )
+    
+    $MIN_HASH = 0x0000
+    $MAX_HASH = 0xFFFF
+    $TARGET_MIN = 0
+    
+    if ($WordlistCount -eq 0) { 
+        return 0 
+    }
+    
+    return [int](((($WordlistCount - $TARGET_MIN) * ($HashValue - $MIN_HASH)) / ($MAX_HASH - $MIN_HASH)) + $TARGET_MIN)
+}
+
+function Generate-Salt {
+    [CmdletBinding()]
+    param()
+    
+    # Define the desired number of words for the salt phrase
+    $saltWordCount = 4
+    
+    try {
+        [string[]]$wordlistData = Get-WordlistData
+        
+        # Generate a cryptographically random salt phrase
+        $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
+        $saltPhraseWords = @()
+        
+        while ($saltPhraseWords.Count -lt $saltWordCount) {
+            # Generate 4 cryptographically random bytes
+            $buffer = [byte[]]::new(4)
+            $rng.GetBytes($buffer)
+            
+            # Use modulo to get a valid wordlist index from CSPRNG output
+            $RandomIndex = [System.BitConverter]::ToInt32($buffer, 0) % $wordlistData.Count
+            
+            $saltPhraseWords += $wordlistData[$RandomIndex]
+        }
+        
+        # Concatenate the words to create the final salt phrase
+        $saltPhrase = $saltPhraseWords -join '-'
+        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
+        
+        # Return the 4-word salt phrase
+        return $saltPhrase
+        
+    } catch {
+        $errorMessage = "Salt generation failed: $($_.Exception.Message)"
+        Write-Error $errorMessage
+        Write-Log -Level "ERROR" -Message $errorMessage
+        throw
+    }
+}
+
 function GeneratePassword {
     [CmdletBinding()]
     param(
     [Parameter(Mandatory=$true)]
     [ValidateNotNullOrEmpty()]
     [string]$targetUsername
+
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SaltPhrase
     )
     
     try {
-        # Helper function to scale hash values to wordlist indices
-        function Scale-HashValue {
-            param(
-                [Parameter(Mandatory=$true)]
-                [int]$HashValue,
-                
-                [Parameter(Mandatory=$true)]
-                [int]$WordlistCount
-            )
-            
-            $MIN_HASH = 0x0000
-            $MAX_HASH = 0xFFFF
-            $TARGET_MIN = 0
-            
-            if ($WordlistCount -eq 0) { 
-                return 0 
-            }
-            
-            return [int](((($WordlistCount - $TARGET_MIN) * ($HashValue - $MIN_HASH)) / ($MAX_HASH - $MIN_HASH)) + $TARGET_MIN)
-        }
-
+        [string[]]$wordlistData = Get-WordlistData
         
-        # Load wordlist data
-        if (Test-Path ".\wordlist.txt") {
-          [string[]]$wordlistData = Get-Content -Path ".\wordlist.txt"
-            Write-Log -Level "INFO" -Message "Loaded $($wordlistData.Count) words from wordlist.txt"
-        } else {
-            Write-Log -Level "ERROR" -Message "wordlist.txt not found. Please Initialize Context first!"
-            throw "wordlist.txt not found"
-        }
-        
-        #Generate a cryptographically random salt phrase
-        $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
-        $saltPhraseWords = @()
-        while ($saltPhraseWords.Count -lt $passwordWordCount) {
-            # Generate 4 cryptographically random bytes
-            $buffer = [byte[]]::new(4)
-            $rng.GetBytes($buffer)
-            
-            # Convert the bytes to an integer and use the modulo operator to get a valid index
-            # This method safely translates the CSPRNG's output into a wordlist index
-            $RandomIndex = [System.BitConverter]::ToInt32($buffer, 0) % $wordlistData.Count
-            
-            $saltPhraseWords += $wordlistData[$RandomIndex]
-        }
-
-        # 4. Concatenate the words to create the final salt phrase
-        $saltPhrase = $saltPhraseWords -join '-'
-        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
-        
-        # Calculate MD5 hash from secret and username
+        # Calculate MD5 hash from the common salt and the unique username (ORIGINAL LOGIC)
         $inputString = "$saltPhrase$targetUsername"
         $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($inputString))
         $md5HashString = [System.BitConverter]::ToString($hashBytes) -replace '-'
         
-        # Determine indices and generate passphrase
+        # Determine indices and generate passphrase (ORIGINAL LOGIC)
         $generatedPasswordWords = @()
         $wordIndices = @()
         
@@ -833,8 +866,8 @@ function GeneratePassword {
                 break
             }
         }
-        
-        # Join words with hyphens to create final password
+
+        # Join words with '5-' to create final password (ORIGINAL LOGIC)
         $generatedPassword = $generatedPasswordWords -join '5-'
         
         # Save the salts to a file
@@ -844,13 +877,14 @@ function GeneratePassword {
             Add-Content -Path $saltFile -Value "Username,Salt"
         }
 
+        # NOTE: The 'salt' being stored here is the common 4-word salt, not the final hash.
         $content = "$($targetUsername),$($saltPhrase)"
         Add-Content -Path $saltFile -Value $content
 
         Write-Host "salt.txt has been updated with the new salt for $targetUsername" -ForegroundColor Green
         Write-Log -Level "SUCCESS" -Message "salt.txt has been updated with the new salt for $targetUsername"
         return $generatedPassword
-        
+        # TODO: Make Add a tag parameter that allows you to enter your own salt phrase to the script and change passwords
     } catch {
         $errorMessage = "Password generation failed: $($_.Exception.Message)"
         Write-Error $errorMessage
@@ -872,6 +906,12 @@ function Change-Passwords {
             $newPassword = GeneratePassword -targetUsername $username            
             Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
 
+        
+       
+
+        $content = "$($targetUsername)"
+        Add-Content -Path $saltFile -Value $content
+
             Write-Host "[SUCCESS] reset password for local user $username" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Successfully reset password for local user $username"
         }
@@ -884,6 +924,20 @@ function Change-Passwords {
         Write-Log -Level "ERROR" -Message $errorMessage
         throw
     }
+}
+
+function Export-Users {
+    [CmdletBinding()]
+    param()
+    #Save Users to a list
+    if (-not (Test-Path ".\$usersFile")) {
+        # Create the file and add a header
+        Add-Content -Path $saltFile -Value "Username"
+    }
+
+    $content = "$($targetUsername)"
+        Add-Content -Path $saltFile -Value $content
+
 }
 
 
