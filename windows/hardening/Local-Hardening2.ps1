@@ -829,7 +829,7 @@ function Generate-SaltPhrase {
         
         # Concatenate the words to create the final salt phrase
         $SaltPhrase = $SaltPhraseWords -join '-'
-        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $SaltPhrase"
+        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase"
         
         # Return the 4-word salt phrase
         return $SaltPhrase
@@ -921,10 +921,10 @@ function Change-Passwords {
         if ([string]::IsNullOrWhiteSpace($SaltPhrase)) {
             Write-Host "[INFO] No salt phrase provided. Generating random salt phrase..." -ForegroundColor Cyan
             $SaltPhrase = Generate-SaltPhrase -WordlistData $WordlistData
-            Write-Log -Level "INFO" -Message "Generated random salt phrase: $SaltPhrase"
+            Write-Log -Level "INFO" -Message "Generated random salt phrase"
         } else {
-            Write-Host "[INFO] Using provided salt phrase: $SaltPhrase" -ForegroundColor Cyan
-            Write-Log -Level "INFO" -Message "Using provided salt phrase: $SaltPhrase"
+            Write-Host "[INFO] Using provided salt phrase" -ForegroundColor Cyan
+            Write-Log -Level "INFO" -Message "Using provided salt phrase"
         }
         
         # Step c: Get list of local user accounts
@@ -970,9 +970,7 @@ function Change-Passwords {
         # Step f: Print the salt phrase to the console
         Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
         Write-Host "SALT PHRASE: $SaltPhrase" -ForegroundColor Yellow
-        Write-Host ("=" * 60) -ForegroundColor Cyan
-        Write-Log -Level "INFO" -Message "Salt phrase used: $SaltPhrase" -Console
-        
+        Write-Host ("=" * 60) -ForegroundColor Cyan        
         Write-Log -Level "INFO" -Message "Password change process complete"
         Write-Host "[SUCCESS] Password change process completed successfully" -ForegroundColor Green
         
@@ -1518,18 +1516,12 @@ function Configure-Firewall {
                 }
             }
             
-            # Disable the firewall profiles temporarily
-            netsh advfirewall set allprofiles state off | Out-Null
-            
-            # Disable all pre-existing inbound and outbound rules
-            netsh advfirewall firewall set rule all dir=in new enable=no | Out-Null
-            netsh advfirewall firewall set rule all dir=out new enable=no | Out-Null
-            
-            # CRITICAL: Always create "Deny All Inbound" rule (with lower priority so Allow rules are evaluated first)
-            Write-Host "  [ACTION] Creating mandatory Deny All Inbound firewall rule..." -ForegroundColor White
-            netsh advfirewall firewall add rule name="Deny All Inbound" dir=in action=block priority=1000 | Out-Null
-            Write-Host "  [SUCCESS] Deny All Inbound rule created" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Created mandatory Deny All Inbound firewall rule"
+            #Enable the firewall profiles and disable all pre-existing inbound and outbound rules
+            Set-NetFirewallProfile -All -Enabled True
+            Get-NetFirewallRule | Disable-NetFirewallRule
+
+            # Create a new firewall rule to block all inbound traffic
+            Set-NetFirewallProfile -All -DefaultInboundAction Block -DefaultOutboundAction Block
             
             # If ports are specified, create Allow rules for them (with higher priority than Deny All so they're evaluated first)
             if ($portsToAllow.Count -gt 0) {
@@ -1553,12 +1545,12 @@ function Configure-Firewall {
                     }
                     
                     # Inbound Allow rules (with higher priority/lower number than Deny All so they're evaluated first)
-                    netsh advfirewall firewall add rule name="TCP Inbound $description" dir=in action=allow protocol=TCP localport=$port priority=100 | Out-Null
-                    netsh advfirewall firewall add rule name="UDP Inbound $description" dir=in action=allow protocol=UDP localport=$port priority=100 | Out-Null
+                    New-NetFirewallRule -DisplayName "Allow TCP $port" -Direction Inbound -LocalPort $port -Protocol TCP -Action Allow -Enabled True
+                    New-NetFirewallRule -DisplayName "Allow UDP $port" -Direction Inbound -LocalPort $port -Protocol UDP -Action Allow -Enabled True
                     
                     # Outbound rules
-                    netsh advfirewall firewall add rule name="TCP Outbound $description" dir=out action=allow protocol=TCP localport=$port | Out-Null
-                    netsh advfirewall firewall add rule name="UDP Outbound $description" dir=out action=allow protocol=UDP localport=$port | Out-Null
+                    New-NetFirewallRule -DisplayName "Allow TCP $port" -Direction Outbound -LocalPort $port -Protocol TCP -Action Allow -Enabled True
+                    New-NetFirewallRule -DisplayName "Allow UDP $port" -Direction Outbound -LocalPort $port -Protocol UDP -Action Allow -Enabled True
                     
                     Write-Log -Level "SUCCESS" -Message "Added firewall rules for port $port ($description)"
                 }
@@ -1569,8 +1561,6 @@ function Configure-Firewall {
                 Write-Log -Level "INFO" -Message "Firewall configured with Deny All Inbound rule only (no ports allowed)"
             }
             
-            # Re-enable the firewall profiles
-            netsh advfirewall set allprofiles state on | Out-Null
             Write-Host "Firewall configured successfully" -ForegroundColor Green
             Write-Log -Level "SUCCESS" -Message "Firewall configuration completed"
         } catch {
