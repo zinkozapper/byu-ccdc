@@ -21,15 +21,29 @@
     Specifies the ports to allow through the firewall during Quick Harden.
     Accepts an array of port numbers (1-65535).
     Default: @(80) - Only port 80 (HTTP) is allowed by default.
+    Alias: -f
+    
+.PARAMETER SaltPhrase
+    Optional salt phrase for password generation (e.g., "123-456-789").
+    If not provided, a random salt phrase will be generated from the wordlist.
+    When provided, this salt will be used for all password generation operations.
+    Alias: -s
     
 .EXAMPLE
     .\Local-Hardening2.ps1
+    Generates random salt phrase for password generation
     
 .EXAMPLE
-    .\Local-Hardening2.ps1 -FirewallPorts 22,80,443,3389
+    .\Local-Hardening2.ps1 -s "123-456-789"
+    Uses provided salt phrase for password generation
     
 .EXAMPLE
-    .\Local-Hardening2.ps1 -f 80,443
+    .\Local-Hardening2.ps1 -f 80,443,3389
+    Configures firewall with specified ports
+    
+.EXAMPLE
+    .\Local-Hardening2.ps1 -s "123-456-789" -f 80,443
+    Uses provided salt phrase and configures firewall ports
     
 .NOTES
     Version: 2.0
@@ -53,6 +67,11 @@ param(
     [Alias("f")]
     [ValidateRange(1,65535)]
     [int[]]$FirewallPorts = @(80)
+    
+    # Password Configuration
+    [Parameter(HelpMessage="Optional salt phrase for password generation (e.g., '123-456-789'). If not provided, a random salt will be generated.")]
+    [Alias("s")]
+    [string]$SaltPhrase = $null
     
     # Future Parameters
     # Add new parameters here with proper categorization and documentation
@@ -749,10 +768,11 @@ function Initialize-System {
 function Get-WordlistData {
     [CmdletBinding()]
     param()
+    
     if (Test-Path ".\wordlist.txt") {
-        [string[]]$wordlistData = Get-Content -Path ".\wordlist.txt"
-        Write-Log -Level "INFO" -Message "Loaded $($wordlistData.Count) words from wordlist.txt"
-        return $wordlistData
+        [string[]]$WordlistData = Get-Content -Path ".\wordlist.txt"
+        Write-Log -Level "INFO" -Message "Loaded $($WordlistData.Count) words from wordlist.txt"
+        return $WordlistData
     } else {
         Write-Log -Level "ERROR" -Message "wordlist.txt not found. Please Initialize Context first!"
         throw "wordlist.txt not found"
@@ -770,96 +790,99 @@ function Scale-HashValue {
         [int]$WordlistCount
     )
     
-    $MIN_HASH = 0x0000
-    $MAX_HASH = 0xFFFF
-    $TARGET_MIN = 0
+    $MinHash = 0x0000
+    $MaxHash = 0xFFFF
+    $TargetMin = 0
     
     if ($WordlistCount -eq 0) { 
         return 0 
     }
     
-    return [int](((($WordlistCount - $TARGET_MIN) * ($HashValue - $MIN_HASH)) / ($MAX_HASH - $MIN_HASH)) + $TARGET_MIN)
+    return [int](((($WordlistCount - $TargetMin) * ($HashValue - $MinHash)) / ($MaxHash - $MinHash)) + $TargetMin)
 }
 
-function Generate-Salt {
+function Generate-SaltPhrase {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$WordlistData
+    )
     
     # Define the desired number of words for the salt phrase
-    $saltWordCount = 4
+    $SaltWordCount = 4
     
     try {
-        [string[]]$wordlistData = Get-WordlistData
-        
         # Generate a cryptographically random salt phrase
-        $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
-        $saltPhraseWords = @()
+        $Rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
+        $SaltPhraseWords = @()
         
-        while ($saltPhraseWords.Count -lt $saltWordCount) {
+        while ($SaltPhraseWords.Count -lt $SaltWordCount) {
             # Generate 4 cryptographically random bytes
-            $buffer = [byte[]]::new(4)
-            $rng.GetBytes($buffer)
+            $Buffer = [byte[]]::new(4)
+            $Rng.GetBytes($Buffer)
             
             # Use modulo to get a valid wordlist index from CSPRNG output
-            $RandomIndex = [System.BitConverter]::ToInt32($buffer, 0) % $wordlistData.Count
+            $RandomIndex = [System.BitConverter]::ToInt32($Buffer, 0) % $WordlistData.Count
             
-            $saltPhraseWords += $wordlistData[$RandomIndex]
+            $SaltPhraseWords += $WordlistData[$RandomIndex]
         }
         
         # Concatenate the words to create the final salt phrase
-        $saltPhrase = $saltPhraseWords -join '-'
-        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $saltPhrase"
+        $SaltPhrase = $SaltPhraseWords -join '-'
+        Write-Log -Level "INFO" -Message "Generated new cryptographic salt phrase: $SaltPhrase"
         
         # Return the 4-word salt phrase
-        return $saltPhrase
+        return $SaltPhrase
         
     } catch {
-        $errorMessage = "Salt generation failed: $($_.Exception.Message)"
-        Write-Error $errorMessage
-        Write-Log -Level "ERROR" -Message $errorMessage
+        $ErrorMessage = "Salt generation failed: $($_.Exception.Message)"
+        Write-Error $ErrorMessage
+        Write-Log -Level "ERROR" -Message $ErrorMessage
         throw
     }
 }
 
-function GeneratePassword {
+function Generate-Password {
     [CmdletBinding()]
     param(
-    [Parameter(Mandatory=$true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$targetUsername
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$TargetUsername,
 
-    [Parameter(Mandatory=$true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$SaltPhrase
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SaltPhrase,
+        
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$WordlistData
     )
     
     try {
-        [string[]]$wordlistData = Get-WordlistData
+        # Calculate MD5 hash from the common salt and the unique username
+        $InputString = "$SaltPhrase$TargetUsername"
+        $HashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($InputString))
+        $Md5HashString = [System.BitConverter]::ToString($HashBytes) -replace '-'
         
-        # Calculate MD5 hash from the common salt and the unique username (ORIGINAL LOGIC)
-        $inputString = "$saltPhrase$targetUsername"
-        $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($inputString))
-        $md5HashString = [System.BitConverter]::ToString($hashBytes) -replace '-'
-        
-        # Determine indices and generate passphrase (ORIGINAL LOGIC)
-        $generatedPasswordWords = @()
-        $wordIndices = @()
+        # Determine indices and generate passphrase
+        $GeneratedPasswordWords = @()
+        $WordIndices = @()
         
         # Process hash in 4-character segments
-        for ($i = 0; $i -lt $md5HashString.Length; $i += 4) {
-            if ($i + 4 -le $md5HashString.Length) {
-                $hashSegment = $md5HashString.Substring($i, 4)
-                $intValue = [Convert]::ToInt32($hashSegment, 16)
+        for ($i = 0; $i -lt $Md5HashString.Length; $i += 4) {
+            if ($i + 4 -le $Md5HashString.Length) {
+                $HashSegment = $Md5HashString.Substring($i, 4)
+                $IntValue = [Convert]::ToInt32($HashSegment, 16)
                 
-                $scaledIndex = Scale-HashValue -HashValue $intValue -WordlistCount $wordlistData.Count
-                $wordIndices += $scaledIndex
+                $ScaledIndex = Scale-HashValue -HashValue $IntValue -WordlistCount $WordlistData.Count
+                $WordIndices += $ScaledIndex
             }
         }
         
         # Generate password words from indices
         for ($i = 0; $i -lt $passwordWordCount; $i++) {
-            if ($i -lt $wordIndices.Count) {
-                $generatedPasswordWords += $wordlistData[$wordIndices[$i]]
+            if ($i -lt $WordIndices.Count) {
+                $GeneratedPasswordWords += $WordlistData[$WordIndices[$i]]
             } else {
                 Write-Warning "Not enough hash segments to generate $passwordWordCount words."
                 Write-Log -Level "WARNING" -Message "Not enough hash segments to generate $passwordWordCount words"
@@ -867,28 +890,15 @@ function GeneratePassword {
             }
         }
 
-        # Join words with '5-' to create final password (ORIGINAL LOGIC)
-        $generatedPassword = $generatedPasswordWords -join '5-'
+        # Join words with '5-' to create final password
+        $GeneratedPassword = $GeneratedPasswordWords -join '5-'
         
-        # Save the salts to a file
-        $saltFile = ".\salt.txt"
-        if (-not (Test-Path $saltFile)) {
-            # Create the file and add a header
-            Add-Content -Path $saltFile -Value "Username,Salt"
-        }
-
-        # NOTE: The 'salt' being stored here is the common 4-word salt, not the final hash.
-        $content = "$($targetUsername),$($saltPhrase)"
-        Add-Content -Path $saltFile -Value $content
-
-        Write-Host "salt.txt has been updated with the new salt for $targetUsername" -ForegroundColor Green
-        Write-Log -Level "SUCCESS" -Message "salt.txt has been updated with the new salt for $targetUsername"
-        return $generatedPassword
-        # TODO: Make Add a tag parameter that allows you to enter your own salt phrase to the script and change passwords
+        return $GeneratedPassword
+        
     } catch {
-        $errorMessage = "Password generation failed: $($_.Exception.Message)"
-        Write-Error $errorMessage
-        Write-Log -Level "ERROR" -Message $errorMessage
+        $ErrorMessage = "Password generation failed for user $TargetUsername : $($_.Exception.Message)"
+        Write-Error $ErrorMessage
+        Write-Log -Level "ERROR" -Message $ErrorMessage
         throw
     }
 }
@@ -896,48 +906,120 @@ function GeneratePassword {
 
 function Change-Passwords {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$SaltPhrase = $null
+    )
     
     try {
-        $userList = Get-LocalUser | Select-Object -ExpandProperty Name
-
-        Write-Log -Level "INFO" -Message "Starting password change process for $($userList.Count) local (non-AD) users"
-        foreach ($username in $userList) {
-            $newPassword = GeneratePassword -targetUsername $username            
-            Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $newPassword -Force) 
-
+        # Step a: Get wordlist data
+        Write-Host "[INFO] Retrieving wordlist data..." -ForegroundColor Cyan
+        [string[]]$WordlistData = Get-WordlistData
+        Write-Log -Level "INFO" -Message "Retrieved wordlist with $($WordlistData.Count) words"
         
-       
-
-        $content = "$($targetUsername)"
-        Add-Content -Path $saltFile -Value $content
-
-            Write-Host "[SUCCESS] reset password for local user $username" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Successfully reset password for local user $username"
+        # Step b: Use provided salt or generate a random one
+        if ([string]::IsNullOrWhiteSpace($SaltPhrase)) {
+            Write-Host "[INFO] No salt phrase provided. Generating random salt phrase..." -ForegroundColor Cyan
+            $SaltPhrase = Generate-SaltPhrase -WordlistData $WordlistData
+            Write-Log -Level "INFO" -Message "Generated random salt phrase: $SaltPhrase"
+        } else {
+            Write-Host "[INFO] Using provided salt phrase: $SaltPhrase" -ForegroundColor Cyan
+            Write-Log -Level "INFO" -Message "Using provided salt phrase: $SaltPhrase"
         }
         
+        # Step c: Get list of local user accounts
+        $UserList = Get-LocalUser | Select-Object -ExpandProperty Name
+        Write-Host "[INFO] Found $($UserList.Count) local user account(s) to process" -ForegroundColor Cyan
+        Write-Log -Level "INFO" -Message "Starting password change process for $($UserList.Count) local (non-AD) users"
+        
+        # Initialize array to store user/password pairs for export
+        $UserPasswordList = @()
+        
+        # Step d: Loop through each user account
+        foreach ($Username in $UserList) {
+            try {
+                # Generate password for this user (passing wordlist and saltphrase)
+                $NewPassword = Generate-Password -TargetUsername $Username -SaltPhrase $SaltPhrase -WordlistData $WordlistData
+                
+                # Debug: Print the new password for this user
+                Write-Host "[DEBUG] Password for $Username : $NewPassword" -ForegroundColor Magenta
+                
+                # Change the user's password
+                $SecurePassword = ConvertTo-SecureString -AsPlainText $NewPassword -Force
+                Get-LocalUser -Name $Username | Set-LocalUser -Password $SecurePassword
+                
+                # Store for export
+                $UserPasswordList += [PSCustomObject]@{
+                    Username = $Username
+                    Password = $NewPassword
+                }
+                
+                Write-Host "[SUCCESS] Reset password for local user: $Username" -ForegroundColor Green
+                Write-Log -Level "SUCCESS" -Message "Successfully reset password for local user: $Username"
+                
+            } catch {
+                $ErrorMessage = "Failed to change password for user $Username : $($_.Exception.Message)"
+                Write-Host "[ERROR] $ErrorMessage" -ForegroundColor Red
+                Write-Log -Level "ERROR" -Message $ErrorMessage
+                # Continue with next user instead of failing completely
+            }
+        }
+        
+        # Step e: Export the list of users and their new passwords to a file
+        if ($UserPasswordList.Count -gt 0) {
+            $PasswordExportFilePath = ".\user_passwords.csv"
+            $UserPasswordList | Export-Csv -Path $PasswordExportFilePath -NoTypeInformation -Encoding UTF8
+            Write-Host "[SUCCESS] Exported user passwords to: $PasswordExportFilePath" -ForegroundColor Green
+            Write-Log -Level "SUCCESS" -Message "Exported $($UserPasswordList.Count) user password(s) to $PasswordExportFilePath"
+        } else {
+            Write-Host "[WARNING] No passwords were changed, so no export file was created" -ForegroundColor Yellow
+            Write-Log -Level "WARNING" -Message "No passwords were changed"
+        }
+        
+        # Export usernames only to users.txt
+        if ($UserList.Count -gt 0) {
+            Export-Users -Usernames $UserList
+        }
+        
+        # Step f: Print the salt phrase to the console
+        Write-Host "`n" + ("=" * 60) -ForegroundColor Cyan
+        Write-Host "SALT PHRASE: $SaltPhrase" -ForegroundColor Yellow
+        Write-Host ("=" * 60) -ForegroundColor Cyan
+        Write-Log -Level "INFO" -Message "Salt phrase used: $SaltPhrase" -Console
+        
         Write-Log -Level "INFO" -Message "Password change process complete"
-
+        Write-Host "[SUCCESS] Password change process completed successfully" -ForegroundColor Green
+        
     } catch {
-        Write-Host "[FAILED] User Password reset failed: $($_.Exception.Message)" -ForegroundColor Red
-
-        Write-Log -Level "ERROR" -Message $errorMessage
+        $ErrorMessage = "User password reset failed: $($_.Exception.Message)"
+        Write-Host "[FAILED] $ErrorMessage" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message $ErrorMessage -Console
         throw
     }
 }
 
 function Export-Users {
     [CmdletBinding()]
-    param()
-    #Save Users to a list
-    if (-not (Test-Path ".\$usersFile")) {
-        # Create the file and add a header
-        Add-Content -Path $saltFile -Value "Username"
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$Usernames
+    )
+    
+    try {
+        $ExportFilePath = ".\users.txt"
+        
+        # Export usernames to file (one per line, no passwords)
+        $Usernames | Out-File -FilePath $ExportFilePath -Encoding UTF8 -Force
+        
+        Write-Host "[SUCCESS] Exported $($Usernames.Count) username(s) to: $ExportFilePath" -ForegroundColor Green
+        Write-Log -Level "SUCCESS" -Message "Exported $($Usernames.Count) username(s) to $ExportFilePath"
+        
+    } catch {
+        $ErrorMessage = "Failed to export usernames: $($_.Exception.Message)"
+        Write-Host "[ERROR] $ErrorMessage" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message $ErrorMessage
+        throw
     }
-
-    $content = "$($targetUsername)"
-        Add-Content -Path $saltFile -Value $content
-
 }
 
 
@@ -1586,7 +1668,7 @@ function Quick-Harden {
         
         # Step 2: Change Passwords
         Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
-        Change-Passwords
+        Change-Passwords -SaltPhrase $SaltPhrase
         
         # Step 3: Configure Firewall
         Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
@@ -1993,7 +2075,7 @@ while ($true) {
             '0' { Print-Log }
             'A' { Initialize-System }
             '1' { Write-Host "`n***Quick Hardening (Essential Steps Only)...***" -ForegroundColor Magenta; Quick-Harden }
-            '2' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords }
+            '2' { Write-Host "`n***Changing Passwords...***" -ForegroundColor Magenta; Change-Passwords -SaltPhrase $SaltPhrase }
             '3' { Write-Host "`n***Adding Competition Users...***" -ForegroundColor Magenta; Add-Competition-Users }
             '4' { Write-Host "`n***Removing all users from RDP group (resetting RDP access)...***" -ForegroundColor Magenta; Remove-RDP-Users }
             '5' { Write-Host "`n***Adding users to RDP group (interactive)...***" -ForegroundColor Magenta; Add-RDP-Users }
