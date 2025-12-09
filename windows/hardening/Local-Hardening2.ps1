@@ -29,7 +29,11 @@
     If not provided, a random salt phrase will be generated from the wordlist.
     When provided, this salt will be used for all password generation operations.
     Alias: -s
-    
+
+.PARAMETER QuickHarden
+    Switch to run the Quick Harden sequence. This will disable unnecessary services, configure the firewall, and change passwords.
+    Alias: -q
+
 .EXAMPLE
     .\Local-Hardening2.ps1
     Generates random salt phrase for password generation
@@ -45,6 +49,10 @@
 .EXAMPLE
     .\Local-Hardening2.ps1 -s "123-456-789" -f 80,443
     Uses provided salt phrase and configures firewall ports
+
+.EXAMPLE
+    .\Local-Hardening2.ps1 -q -f 80, 443
+    Runs the Quick Harden sequence with specified firewall ports and changes passwords using the provided salt phrase
     
 .NOTES
     Version: 2.0
@@ -66,12 +74,17 @@ param(
     # Firewall Configuration
     [Parameter(HelpMessage="Ports to allow through firewall during Quick Harden. Accepts comma-separated port numbers (1-65535).")]
     [Alias("f")]
-    [string]$FirewallPorts = $null,
+    [string[]]$FirewallPorts = $null,
     
     # Password Configuration
     [Parameter(HelpMessage="Optional salt phrase for password generation (e.g., '123-456-789'). If not provided, a random salt will be generated.")]
     [Alias("s")]
-    [string]$SaltPhrase = $null
+    [string]$SaltPhrase = $null,
+
+    # Quick Harden Configuration
+    [Parameter(HelpMessage="Switch to run the Quick Harden sequence. This will disable unnecessary services, configure the firewall, and change passwords.")]
+    [Alias("q")]
+    [switch]$QuickHarden = $false
     
     # Future Parameters
     # Add new parameters here with proper categorization and documentation
@@ -79,15 +92,23 @@ param(
 
 # Parse FirewallPorts parameter if provided
 # Handle comma-separated ports with optional spaces (e.g., "80,443,3389" or "80, 443, 3389")
+# Note: Write-Log is not available here, so we only use Write-Host. Logging will happen later in Configure-Firewall.
 $script:FirewallPortsArray = $null
 $script:FirewallPortsProvided = $false
 
-if (-not [string]::IsNullOrWhiteSpace($FirewallPorts)) {
+if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
     try {
-        # Split by comma, trim whitespace, filter empty strings, convert to int
-        $script:FirewallPortsArray = $FirewallPorts.Split(',') | 
-            ForEach-Object { $_.Trim() } | 
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | 
+        # Handle array input - flatten and process each element
+        $portStrings = @()
+        foreach ($item in $FirewallPorts) {
+            if (-not [string]::IsNullOrWhiteSpace($item)) {
+                # If item contains commas, split it (handles cases like "80,443" as single string)
+                $portStrings += $item.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            }
+        }
+        
+        # Convert to integers and validate
+        $script:FirewallPortsArray = $portStrings | 
             ForEach-Object { 
                 $port = [int]$_
                 if ($port -lt 1 -or $port -gt 65535) {
@@ -99,11 +120,11 @@ if (-not [string]::IsNullOrWhiteSpace($FirewallPorts)) {
         if ($script:FirewallPortsArray.Count -gt 0) {
             $script:FirewallPortsProvided = $true
             Write-Host "[INFO] Firewall ports provided via parameter: $($script:FirewallPortsArray -join ', ')" -ForegroundColor Cyan
-            Write-Log -Level "INFO" -Message "Firewall ports provided via -f parameter: $($script:FirewallPortsArray -join ', ')"
+            # Note: Write-Log will be called later in Configure-Firewall after logging is initialized
         }
     } catch {
         Write-Host "[ERROR] Failed to parse FirewallPorts parameter: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Log -Level "ERROR" -Message "Failed to parse FirewallPorts parameter: $($_.Exception.Message)"
+        # Note: Write-Log is not available here, logging will happen later if needed
         throw "Invalid FirewallPorts parameter: $($_.Exception.Message)"
     }
 }
@@ -2055,6 +2076,11 @@ try {
     Write-Host "`n[ERROR] Pre-flight checks failed: $($_.Exception.Message)" -ForegroundColor Red
     Write-Log -Level "CRITICAL" -Message "Pre-flight checks failed: $($_.Exception.Message)" -Console
     exit 1
+}
+
+# Check if Quick Harden parameter was provided
+if ($QuickHarden) {
+    Quick-Harden
 }
 
 
