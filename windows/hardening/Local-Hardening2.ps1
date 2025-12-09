@@ -1572,11 +1572,11 @@ function Configure-Firewall {
             }
 
             #Backup current firewall config
-            $FirewallBackupPath = ".\fwback.xml"
+            $FirewallBackupPath = ".\fwback.wfw"
             Write-Host "Backing up current Windows Firewall policy to $FirewallBackupPath" -ForegroundColor Yellow
             try {
                 # The -PolicyStore parameter specifies the active, persistent store.
-                Export-NetFirewallPolicy -Path $FirewallBackupPath -PolicyStore PersistentStore
+                netsh advfirewall export "$FirewallBackupPath" | Out-Null
                 Write-Host "Backup successful. To restore, use: Import-NetFirewallPolicy -Path '$FirewallBackupPath'" -ForegroundColor Green
             } catch {
                 Write-Host "Error during backup: $($_.Exception.Message). Continuing with rule modification." -ForegroundColor Red
