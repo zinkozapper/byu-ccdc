@@ -1682,9 +1682,6 @@ function Quick-Harden {
         
         # Step 3: Configure Firewall
         Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
-        # Scenario A: If script was called with -f parameter, Configure-Firewall will use those ports automatically
-        # Scenario B: If no -f parameter, only apply Deny All (no Allow rules)
-        # Configure-Firewall checks $script:FirewallPortsProvided internally
         Configure-Firewall -FromQuickHarden
         
         # Step 4: Disable unnecessary services
