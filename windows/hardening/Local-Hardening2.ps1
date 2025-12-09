@@ -1722,7 +1722,23 @@ function Quick-Harden {
         Write-Host "`nStep 7/8: Configuring Splunk..." -ForegroundColor Cyan
         Write-Host "  [NOTE] User input will be required for Splunk configuration" -ForegroundColor Yellow
         $SplunkIP = Read-Host "`nInput IP address of Splunk Server"
-        $SplunkVersion = Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
+
+        # Extract numeric version from OSVersion string
+        $SplunkVersion = switch -Regex ($script:OSInfo.OSVersion) {
+            'Windows Server 2022' { '2022'; break }
+            'Windows Server 2019' { '2019'; break }
+            'Windows Server 2016' { '2016'; break }
+            'Windows Server 2012 R2' { '2012'; break }
+            'Windows Server 2012' { '2012'; break }
+            'Windows 11' { '11'; break }
+            'Windows 10' { '10'; break }
+            'Windows 8' { '8'; break }
+            'Windows 7' { '7'; break }
+            default { 
+                Write-Warning "Unknown OS version: $($script:OSInfo.OSVersion). Defaulting to prompt."
+                Read-Host "`nInput OS Version (7, 8, 10, 11, 2012, 2016, 2019, 2022): "
+            }
+        }
         Download-Install-Setup-Splunk -Version $SplunkVersion -IP $SplunkIP
         
         # Step 8: Set Execution Policy to Restricted
