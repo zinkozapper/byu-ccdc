@@ -19,8 +19,9 @@
     
 .PARAMETER FirewallPorts
     Specifies the ports to allow through the firewall during Quick Harden.
-    Accepts an array of port numbers (1-65535).
-    Default: @(80) - Only port 80 (HTTP) is allowed by default.
+    Accepts a comma-separated string of port numbers (1-65535).
+    Spaces after commas are automatically handled (e.g., "80,443,3389" or "80, 443, 3389").
+    If provided, suppresses firewall-related prompts during script execution.
     Alias: -f
     
 .PARAMETER SaltPhrase
@@ -65,8 +66,7 @@ param(
     # Firewall Configuration
     [Parameter(HelpMessage="Ports to allow through firewall during Quick Harden. Accepts comma-separated port numbers (1-65535).")]
     [Alias("f")]
-    [ValidateRange(1,65535)]
-    [int[]]$FirewallPorts = @(80),
+    [string]$FirewallPorts = $null,
     
     # Password Configuration
     [Parameter(HelpMessage="Optional salt phrase for password generation (e.g., '123-456-789'). If not provided, a random salt will be generated.")]
@@ -76,6 +76,37 @@ param(
     # Future Parameters
     # Add new parameters here with proper categorization and documentation
 )
+
+# Parse FirewallPorts parameter if provided
+# Handle comma-separated ports with optional spaces (e.g., "80,443,3389" or "80, 443, 3389")
+$script:FirewallPortsArray = $null
+$script:FirewallPortsProvided = $false
+
+if (-not [string]::IsNullOrWhiteSpace($FirewallPorts)) {
+    try {
+        # Split by comma, trim whitespace, filter empty strings, convert to int
+        $script:FirewallPortsArray = $FirewallPorts.Split(',') | 
+            ForEach-Object { $_.Trim() } | 
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | 
+            ForEach-Object { 
+                $port = [int]$_
+                if ($port -lt 1 -or $port -gt 65535) {
+                    throw "Port $port is out of valid range (1-65535)"
+                }
+                $port
+            }
+        
+        if ($script:FirewallPortsArray.Count -gt 0) {
+            $script:FirewallPortsProvided = $true
+            Write-Host "[INFO] Firewall ports provided via parameter: $($script:FirewallPortsArray -join ', ')" -ForegroundColor Cyan
+            Write-Log -Level "INFO" -Message "Firewall ports provided via -f parameter: $($script:FirewallPortsArray -join ', ')"
+        }
+    } catch {
+        Write-Host "[ERROR] Failed to parse FirewallPorts parameter: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Log -Level "ERROR" -Message "Failed to parse FirewallPorts parameter: $($_.Exception.Message)"
+        throw "Invalid FirewallPorts parameter: $($_.Exception.Message)"
+    }
+}
 
 #region Script Configuration and Global Variables
 
@@ -1404,26 +1435,23 @@ function Get-Comma-Separated-List {
 
 <#
 .SYNOPSIS
-    Sets Windows Firewall rules with specified ports.
-    
-.DESCRIPTION
-<#
-.SYNOPSIS
     Configures Windows Firewall with mandatory Deny All Inbound rule and optional port allowances.
     
 .DESCRIPTION
     This function consolidates all firewall configuration logic. It always creates a high-priority
     "Deny All Inbound" rule for security. It then handles three scenarios:
     
-    - Scenario A: Script called with -f parameter - uses script-level $FirewallPorts
-    - Scenario B: Called from Quick-Harden without parameters - only Deny All (no Allow rules)
+    - Scenario A: Script called with -f parameter - uses script-level $script:FirewallPortsArray (suppresses prompts)
+    - Scenario B: Called from Quick-Harden without -f parameter - only Deny All (no Allow rules)
     - Scenario C: Called manually/interactively - prompts user for ports and confirmation
     
 .PARAMETER FirewallPorts
-    Optional array of port numbers to allow. If not provided, behavior depends on context.
+    Optional array of port numbers to allow (function parameter). If script was called with -f parameter,
+    those ports take precedence and this parameter is ignored.
     
 .PARAMETER FromQuickHarden
-    Switch indicating this is called from Quick-Harden sequence. Prevents interactive prompts.
+    Switch indicating this is called from Quick-Harden sequence. Prevents interactive prompts unless
+    no -f parameter was provided at script launch.
 #>
 function Configure-Firewall {
     [CmdletBinding()]
@@ -1440,19 +1468,25 @@ function Configure-Firewall {
             # Determine which scenario we're in and get ports
             $portsToAllow = @()
             
-            # Scenario B: Called from Quick-Harden without parameters
-            if ($FromQuickHarden) {
-                # If ports are explicitly provided to function, use them; otherwise Scenario B (Deny All only)
+            # Scenario A: Script called with -f parameter (ports provided via script parameter)
+            if ($script:FirewallPortsProvided) {
+                $portsToAllow = $script:FirewallPortsArray
+                Write-Host "  [INFO] Using firewall ports from script parameter: $($portsToAllow -join ', ')" -ForegroundColor Yellow
+                Write-Log -Level "INFO" -Message "Using firewall ports from -f parameter: $($portsToAllow -join ', ')"
+            }
+            # Scenario B: Called from Quick-Harden without -f parameter (Deny All only)
+            elseif ($FromQuickHarden) {
+                # If ports are explicitly provided to function parameter, use them
                 if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
                     $portsToAllow = $FirewallPorts
+                    Write-Host "  [INFO] Using firewall ports from function parameter: $($portsToAllow -join ', ')" -ForegroundColor Yellow
                 }
                 # If portsToAllow is still empty, Scenario B - only Deny All will be applied
+                if ($portsToAllow.Count -eq 0) {
+                    Write-Host "  [INFO] No ports specified - applying Deny All Inbound rule only" -ForegroundColor Yellow
+                }
             }
-            # Scenario A: Script called with -f parameter (ports provided to function)
-            elseif ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
-                $portsToAllow = $FirewallPorts
-            }
-            # Scenario C: Interactive/manual call (not from Quick-Harden, no ports provided)
+            # Scenario C: Interactive/manual call (not from Quick-Harden, no -f parameter)
             else {
                 # Interactive prompt for ports
                 $ready = $false
@@ -1648,23 +1682,10 @@ function Quick-Harden {
         
         # Step 3: Configure Firewall
         Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
-        # Scenario A: If script was called with -f parameter, use those ports
-        # Scenario B: If no -f parameter (or default), only apply Deny All (no Allow rules)
-        # Check if script-level FirewallPorts was explicitly provided
-        # Note: Default is @(80), so we need to check if it was explicitly set
-        # For Scenario B (Quick-Harden default), we call without ports to get Deny All only
-        # For Scenario A, we pass the ports explicitly
-        if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
-            # Check if it's not just the default single port 80
-            # If user explicitly provided -f 80, that's still Scenario A
-            # We'll pass it through and let Configure-Firewall handle it
-            Write-Host "  [INFO] Configuring firewall with ports from script parameter: $($FirewallPorts -join ', ')" -ForegroundColor Yellow
-            Configure-Firewall -FirewallPorts $FirewallPorts -FromQuickHarden
-        } else {
-            # No ports provided (Scenario B: Deny All only)
-            Write-Host "  [INFO] Applying default firewall configuration (Deny All Inbound, no ports allowed)" -ForegroundColor Yellow
-            Configure-Firewall -FromQuickHarden
-        }
+        # Scenario A: If script was called with -f parameter, Configure-Firewall will use those ports automatically
+        # Scenario B: If no -f parameter, only apply Deny All (no Allow rules)
+        # Configure-Firewall checks $script:FirewallPortsProvided internally
+        Configure-Firewall -FromQuickHarden
         
         # Step 4: Disable unnecessary services
         Write-Host "`nStep 4/8: Disabling Unnecessary Services..." -ForegroundColor Cyan
