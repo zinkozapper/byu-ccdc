@@ -940,10 +940,7 @@ function Change-Passwords {
             try {
                 # Generate password for this user (passing wordlist and saltphrase)
                 $NewPassword = Generate-Password -TargetUsername $Username -SaltPhrase $SaltPhrase -WordlistData $WordlistData
-                
-                # Debug: Print the new password for this user
-                Write-Host "[DEBUG] Password for $Username : $NewPassword" -ForegroundColor Magenta
-                
+ 
                 # Change the user's password
                 $SecurePassword = ConvertTo-SecureString -AsPlainText $NewPassword -Force
                 Get-LocalUser -Name $Username | Set-LocalUser -Password $SecurePassword
@@ -963,17 +960,6 @@ function Change-Passwords {
                 Write-Log -Level "ERROR" -Message $ErrorMessage
                 # Continue with next user instead of failing completely
             }
-        }
-        
-        # Step e: Export the list of users and their new passwords to a file
-        if ($UserPasswordList.Count -gt 0) {
-            $PasswordExportFilePath = ".\user_passwords.csv"
-            $UserPasswordList | Export-Csv -Path $PasswordExportFilePath -NoTypeInformation -Encoding UTF8
-            Write-Host "[SUCCESS] Exported user passwords to: $PasswordExportFilePath" -ForegroundColor Green
-            Write-Log -Level "SUCCESS" -Message "Exported $($UserPasswordList.Count) user password(s) to $PasswordExportFilePath"
-        } else {
-            Write-Host "[WARNING] No passwords were changed, so no export file was created" -ForegroundColor Yellow
-            Write-Log -Level "WARNING" -Message "No passwords were changed"
         }
         
         # Export usernames only to users.txt
@@ -1974,7 +1960,7 @@ function Patch-Mimikatz {
     Displays the main menu.
 #>
 function Show-Main-Menu {
-    Clear-Host
+    #Clear-Host This line clears the console. Makes the menu look cleaner.
     Write-Host "`n==== Local Windows Hardening Menu ====" -ForegroundColor Green
     Write-Host "Prerequisites:"
     Write-Host "  - (A) Initialize Context BEFORE running hardening tasks" -ForegroundColor Yellow
