@@ -66,7 +66,7 @@ param(
     [Parameter(HelpMessage="Ports to allow through firewall during Quick Harden. Accepts comma-separated port numbers (1-65535).")]
     [Alias("f")]
     [ValidateRange(1,65535)]
-    [int[]]$FirewallPorts = @(80)
+    [int[]]$FirewallPorts = @(80),
     
     # Password Configuration
     [Parameter(HelpMessage="Optional salt phrase for password generation (e.g., '123-456-789'). If not provided, a random salt will be generated.")]
