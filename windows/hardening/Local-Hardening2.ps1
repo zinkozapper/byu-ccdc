@@ -1570,13 +1570,25 @@ function Configure-Firewall {
                     throw "Operation skipped by user"
                 }
             }
-            
+
+            #Backup current firewall config
+            $FirewallBackupPath = ".\fwback.xml"
+            Write-Host "Backing up current Windows Firewall policy to $FirewallBackupPath" -ForegroundColor Yellow
+            try {
+                # The -PolicyStore parameter specifies the active, persistent store.
+                Export-NetFirewallPolicy -Path $FirewallBackupPath -PolicyStore PersistentStore
+                Write-Host "Backup successful. To restore, use: Import-NetFirewallPolicy -Path '$FirewallBackupPath'" -ForegroundColor Green
+            } catch {
+                Write-Host "Error during backup: $($_.Exception.Message). Continuing with rule modification." -ForegroundColor Red
+            }
+
+
             #Enable the firewall profiles and disable all pre-existing inbound and outbound rules
             Set-NetFirewallProfile -All -Enabled True
             Get-NetFirewallRule | Disable-NetFirewallRule
 
             # Create a new firewall rule to block all inbound traffic
-            Set-NetFirewallProfile -All -DefaultInboundAction Block -DefaultOutboundAction Block
+            Set-NetFirewallProfile -All -DefaultInboundAction Block -DefaultOutboundAction Allow
             
             # If ports are specified, create Allow rules for them (with higher priority than Deny All so they're evaluated first)
             if ($portsToAllow.Count -gt 0) {
@@ -1601,13 +1613,7 @@ function Configure-Firewall {
                     
                     # Inbound Allow rules (with higher priority/lower number than Deny All so they're evaluated first)
                     New-NetFirewallRule -DisplayName "Allow TCP $port" -Direction Inbound -LocalPort $port -Protocol TCP -Action Allow -Enabled True
-                    New-NetFirewallRule -DisplayName "Allow UDP $port" -Direction Inbound -LocalPort $port -Protocol UDP -Action Allow -Enabled True
-                    
-                    # Outbound rules
-                    New-NetFirewallRule -DisplayName "Allow TCP $port" -Direction Outbound -LocalPort $port -Protocol TCP -Action Allow -Enabled True
-                    New-NetFirewallRule -DisplayName "Allow UDP $port" -Direction Outbound -LocalPort $port -Protocol UDP -Action Allow -Enabled True
-                    
-                    Write-Log -Level "SUCCESS" -Message "Added firewall rules for port $port ($description)"
+                    Write-Log -Level "SUCCESS" -Message "Added TCP inbound rules for port $port ($description)"
                 }
                 Write-Host "  [SUCCESS] Allow rules created for ports: $($portsToAllow -join ', ')" -ForegroundColor Green
                 Write-Log -Level "SUCCESS" -Message "Firewall configured with ports: $($portsToAllow -join ', ')"
