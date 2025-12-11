@@ -34,6 +34,10 @@
     Switch to run the Quick Harden sequence. This will disable unnecessary services, configure the firewall, and change passwords.
     Alias: -q
 
+.PARAMETER QuickHardenNoPassword
+    Switch to run the Quick Harden sequence without password changes. This will disable unnecessary services, configure the firewall, but skip password changes.
+    Alias: -qp
+
 .EXAMPLE
     .\Local-Hardening2.ps1
     Generates random salt phrase for password generation
@@ -54,15 +58,10 @@
     .\Local-Hardening2.ps1 -q -f 80, 443
     Runs the Quick Harden sequence with specified firewall ports and changes passwords using the provided salt phrase
     
-.NOTES
-    Version: 2.0
-    Author: BYU-CCDC Team
-    Requires: Administrator privileges
-    Last Updated: Nov 2025
-    
-    Change Log:
-    v2.0 - Added comprehensive OS detection, platform-specific hardening, robust error handling,
-           enhanced user feedback, and comprehensive logging
+.EXAMPLE
+    .\Local-Hardening2.ps1 -qp -f 80, 443
+    Runs the Quick Harden sequence with specified firewall ports but skips password changes
+
 #>
 
 [CmdletBinding()]
@@ -84,7 +83,12 @@ param(
     # Quick Harden Configuration
     [Parameter(HelpMessage="Switch to run the Quick Harden sequence. This will disable unnecessary services, configure the firewall, and change passwords.")]
     [Alias("q")]
-    [switch]$QuickHarden = $false
+    [switch]$QuickHarden = $false,
+    
+    # Quick Harden Without Password Change
+    [Parameter(HelpMessage="Switch to run the Quick Harden sequence without password changes. This will disable unnecessary services, configure the firewall, but skip password changes.")]
+    [Alias("qp")]
+    [switch]$QuickHardenNoPassword = $false
     
     # Future Parameters
     # Add new parameters here with proper categorization and documentation
@@ -1685,15 +1689,25 @@ function Disable-Unnecessary-Services {
 #>
 function Quick-Harden {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory=$false)]
+        [switch]$SkipPasswordChange = $false
+    )
     
-    Invoke-HardeningOperation -OperationName "Quick Harden" -ScriptBlock {
+    $operationName = if ($SkipPasswordChange) { "Quick Harden (No Password Change)" } else { "Quick Harden" }
+    $totalSteps = if ($SkipPasswordChange) { 7 } else { 8 }
+    $currentStep = 1
+    
+    Invoke-HardeningOperation -OperationName $operationName -ScriptBlock {
         Write-Host "`n=== QUICK HARDENING STARTED ===" -ForegroundColor Green
         Write-Host "This will perform essential hardening steps automatically..." -ForegroundColor Yellow
         Write-Host "`n[WARNING] Quick Harden will run automatically without user prompts." -ForegroundColor Yellow
         Write-Host "EXCEPTIONS: User input will be required for:" -ForegroundColor Cyan
         Write-Host "  - Add Competition Users (usernames/passwords)" -ForegroundColor Cyan
         Write-Host "  - Configure Splunk (Splunk server IP and OS version)" -ForegroundColor Cyan
+        if ($SkipPasswordChange) {
+            Write-Host "`n[NOTE] Password change step will be skipped (using -qp parameter)" -ForegroundColor Yellow
+        }
         Write-Host ""
         
         # Call initialization first
@@ -1703,9 +1717,14 @@ function Quick-Harden {
         Write-Host "`nStep 1/8: Upgrading SMB..." -ForegroundColor Cyan
         Upgrade-SMB
         
-        # Step 2: Change Passwords
-        Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
-        Change-Passwords -SaltPhrase $SaltPhrase
+        # Step 2: Change Passwords (skip if requested)
+        if (-not $SkipPasswordChange) {
+            Write-Host "`nStep 2/8: Changing Passwords..." -ForegroundColor Cyan
+            Change-Passwords -SaltPhrase $SaltPhrase
+        } else {
+            Write-Host "`n[SKIPPED] Step 2/8: Password change step skipped (using -qp parameter)" -ForegroundColor Yellow
+            Write-Log -Level "INFO" -Message "Password change step skipped per -qp parameter"
+        }
         
         # Step 3: Configure Firewall
         Write-Host "`nStep 3/8: Configuring Firewall..." -ForegroundColor Cyan
@@ -2103,6 +2122,11 @@ try {
 # Check if Quick Harden parameter was provided
 if ($QuickHarden) {
     Quick-Harden
+}
+
+# Check if Quick Harden No Password parameter was provided
+if ($QuickHardenNoPassword) {
+    Quick-Harden -SkipPasswordChange
 }
 
 
