@@ -1,6 +1,6 @@
 $NUM_WORDS = 5
 $wordlistName = "wordlist.txt"
-$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/zinkozapper/byu-ccdc/main/windows/hardening"
+$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/hardening"
 $wordlistPath = ".\$wordlistName"
 
 # --- Wordlist Loading and Downloading ---

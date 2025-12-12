@@ -138,7 +138,7 @@ if ($null -ne $FirewallPorts -and $FirewallPorts.Count -gt 0) {
 $ErrorActionPreference = "Continue"
 # TODO: Change this to the BYU-CCDC repo before pushing to production.
 # Correct repo: https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/hardening
-$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/zinkozapper/byu-ccdc/refs/heads/main/windows/hardening/"
+$ccdcRepoWindowsHardeningPath = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/hardening/"
 $portsFile = "ports.json"
 $usersFile = "users.txt"    
 $advancedAuditingFile = "advancedAuditing.ps1"
