@@ -5,6 +5,10 @@ param(
     [string]$Version,
     [Parameter(Mandatory=$false)]
     [string]$IP
+
+    [Parameter(Mandatory=$false, HelpMessage = "If we need to download the wordlist, this is the URL to get it from")]
+    [Alias("url")]
+    [string]$downloadURL = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/splunk/splunk.ps1"
 )
 
 if (-not $Version) {
@@ -21,9 +25,10 @@ Write-Host "========================================" -ForegroundColor Cyan
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $downloadURL = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/splunk/splunk.ps1"
-    Write-Host "Downloading Splunk installation script..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri $downloadURL -OutFile ./splunk.ps1
+    if ( -not(Test-Path "./splunk.ps1")) {
+        Write-Host "Downloading Splunk installation script..." -ForegroundColor Yellow
+        Invoke-WebRequest -Uri $downloadURL -OutFile ./splunk.ps1
+    }
     Write-Host "Downloaded Splunk installation script" -ForegroundColor Green
 
     $SplunkServer = "$($IP):9997"

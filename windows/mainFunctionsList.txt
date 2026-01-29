@@ -1,20 +1,21 @@
-Disable Users
-Add Competition Users
-Harden RDP
-Configure Firewall
-Disable Unnecessary Services
+Disable Users - c
+Add Competition Users - c
+Harden RDP - c
+Configure Firewall -c
+Disable Unnecessary Services -c
 Create Good GPO
-Enable Auditing
-Configure Splunk
-Configure Sysmon and Connect to Splunk
+Enable Auditing - c
+Configure Splunk - c
+Configure Sysmon and Connect to Splunk - c
+Quick hardening - c
 Harden IIS
 Enable UAC
-Install EternalBlue Patch
-Upgrade SMB
+Install EternalBlue Patch -c
+Upgrade SMB -c
 Patch DCSync
-Patch Mimikatz
+Patch Mimikatz -c
 Group Management
 Identify and Fix ASREP Roasting
 Identify and Fix Kerberoasting
 Run Windows Updates
-Set Execution Policy
+Set Execution Policy -c

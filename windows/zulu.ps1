@@ -47,19 +47,22 @@
 param(
     [Alias("h")][switch]$Help,
     [Alias("i")][switch]$Initial,
-    [Alias("u")][string]$User,
+    [Alias("b")][string]$User,
     [Alias("U")][string]$UsersFile,
     [Alias("g")][switch]$GenerateOnly,
-    [Alias("p")][string]$PCRFile
-)
+    [Alias("p")][string]$PCRFile,
 
+    [Parameter(Mandatory=$false, HelpMessage = "If we need to download the wordlist, this is the URL to get it from")]
+    [Alias("url")]
+    [string]$WordlistUrl = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/wordlist.txt"
+)
+    
 # Script configuration
 $NumWords = 5
-$WordlistUrl = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/wordlist.txt"
 $ExportUsersFile = "users_zulu.csv"
 $LogFile = "zulu.log"
 $WordlistFile = "wordlist.txt"
-$ExcludedUsers = @("Administrator", "ccdcuser1", "ccdcuser2")
+$ExcludedUsers = @("Administrator", "ccdcuser1", "ccdcuser2", "ccdcuser3")
 
 function Write-Usage {
     Write-Host "Usage: .\Set-Passwords.ps1 [options]" -ForegroundColor Green
@@ -71,7 +74,9 @@ function Write-Usage {
         "  -User, -u          Change password for a single user",
         "  -UsersFile, -U     Change passwords for newline-separated users in a file",
         "  -GenerateOnly, -g  Generate/print passwords only, do not change them",
-        "  -PCRFile, -p       Output generated passwords as 'username,password' to a PCR (CSV) file"
+        "  -PCRFile, -p       Output generated passwords as 'username,password' to a PCR (CSV) file",
+        "  -url <url>         The url to the wordlist" -ForegroundColor Cyan
+
     ) | ForEach-Object { Write-Host $_ -ForegroundColor Cyan }
 }
 
@@ -116,34 +121,72 @@ function Test-Prerequisites {
     }
 }
 
-function Set-UserPassword {
-    param([string]$Username, [string]$PasswordPrompt, [switch]$AddToAdmins)
-    $password = Get-SilentInput $PasswordPrompt
-    $confirmPassword = Get-SilentInput "Confirm password: "
-    if ($password -ne $confirmPassword) {
-        Write-ColorText "Passwords do not match." -ForegroundColor Red
-        exit 1
+function Test-IsDomainController {
+    try {
+        $ntds = Get-Service -Name ntds -ErrorAction SilentlyContinue
+        return $ntds -ne $null
+    } catch {
+        return $false
     }
-    $securePassword = ConvertTo-SecureString -AsPlainText $password -Force
-    Get-LocalUser -Name $Username | Set-LocalUser -Password $securePassword
-    if ($AddToAdmins) {
-        Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
+}
+
+
+function Set-UserPassword {
+    param(
+        [string]$Username,
+        [string]$PasswordPrompt,
+        [string]$Password,           # new optional parameter
+        [switch]$AddToAdmins
+    )
+
+    if (-not $Password) {
+        $Password = Get-SilentInput $PasswordPrompt
+        $confirmPassword = Get-SilentInput "Confirm password: "
+        if ($Password -ne $confirmPassword) {
+            Write-Host "Passwords do not match." -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    $securePassword = ConvertTo-SecureString -AsPlainText $Password -Force
+
+    if ($IsDomainController) {
+        Set-ADAccountPassword -Identity $Username -Reset -NewPassword $securePassword -ErrorAction Stop
+        if ($AddToAdmins) { Add-ADGroupMember -Identity "Domain Admins" -Members $Username -ErrorAction SilentlyContinue }
+    } else {
+        Get-LocalUser -Name $Username | Set-LocalUser -Password $securePassword
+        if ($AddToAdmins) { Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue }
     }
 }
 
 function Initialize-Users {
     Write-Host "Changing Administrator password..." -ForegroundColor Green
     Set-UserPassword -Username "Administrator" -PasswordPrompt "Enter new password for Administrator: "
-    Write-Host "`nCreating ccdcuser1 and ccdcuser2..."
-    @("ccdcuser1", "ccdcuser2") | ForEach-Object {
-        if (-not (Get-LocalUser -Name $_ -ErrorAction SilentlyContinue)) {
-            New-LocalUser -Name $_ -NoPassword
+    if ($IsDomainController) {
+        @("ccdcuser3") | ForEach-Object {
+            if (-not (Get-ADUser -Identity $_ -ErrorAction SilentlyContinue)) {
+                Write-Host "Domain user '$_' not found. Please create it before setting a password, or create it now using 'New-ADUser'." -ForegroundColor Yellow
+            }
         }
+        
+        Write-Host "`nSetting passwords for CCDC domain admin..."
+        foreach ($u in @("ccdcuser3")) {
+            if (Get-ADUser -Identity $u -ErrorAction SilentlyContinue) {
+                Set-UserPassword -Username $u -PasswordPrompt "Enter password for ccdcuser3: " -AddToAdmins
+            }
+        }
+    } else {
+        Write-Host "`nCreating ccdcuser1 and ccdcuser2..."
+
+        @("ccdcuser1", "ccdcuser2") | ForEach-Object {
+            if (-not (Get-LocalUser -Name $_ -ErrorAction SilentlyContinue)) {
+                New-LocalUser -Name $_ -NoPassword
+            }
+        }
+        Write-Host "`nSetting passwords for CCDC users..."
+        Set-UserPassword -Username "ccdcuser1" -PasswordPrompt "Enter password for ccdcuser1: " -AddToAdmins
+        Set-UserPassword -Username "ccdcuser2" -PasswordPrompt "Enter password for ccdcuser2: "
     }
-    
-    Write-Host "`nSetting passwords for CCDC users..."
-    Set-UserPassword -Username "ccdcuser1" -PasswordPrompt "Enter password for ccdcuser1: " -AddToAdmins
-    Set-UserPassword -Username "ccdcuser2" -PasswordPrompt "Enter password for ccdcuser2: "
 }
 
 function Scale-HashValue {
@@ -180,6 +223,12 @@ Write-Host "The default behavior is to change passwords for all users except: $(
 
 Test-Prerequisites
 
+#Determine if this machine is a Domain Controller and set a flag for later use
+$IsDomainController = Test-IsDomainController
+if ($IsDomainController) {
+    Write-Host "Domain Controller detected - AD password operations will be used." -ForegroundColor Green
+}
+
 if ($Initial) {
     Write-Host "Performing initial user setup..." -ForegroundColor Green
     Initialize-Users
@@ -191,7 +240,10 @@ $rawUsers = if ($User) { @($User) }
             elseif ($UsersFile) { 
                 if (-not (Test-Path $UsersFile)) { Write-Host "Users file '$UsersFile' not found." -ForegroundColor Red; exit 1 }
                 Get-Content $UsersFile 
-            } 
+            }
+            elseif ($IsDomainController) { 
+                Get-ADUser -Filter * | Where-Object { $_.Enabled } | Select-Object -ExpandProperty SamAccountName 
+            }
             else { 
                 Get-LocalUser | Where-Object { $_.Enabled } | Select-Object -ExpandProperty Name 
             }
@@ -227,20 +279,25 @@ foreach ($username in $users) {
     if (-not $GenerateOnly) {
         Write-Host "Changing password for user $username..."
         try {
-            Get-LocalUser -Name $username | Set-LocalUser -Password (ConvertTo-SecureString -AsPlainText $password -Force)
-            Write-Host "Successfully changed password for $username." -ForegroundColor Green
-            Add-LogEntry "Successfully changed password for $username"
+            Set-UserPassword -Username $username -Password $password
+            if ($IsDomainController) {
+                Write-Host "Successfully changed AD password for ${username}." -ForegroundColor Green
+                Add-LogEntry "Successfully changed AD password for ${username}."
+            } else {
+                Write-Host "Successfully changed password for ${username}." -ForegroundColor Green
+                Add-LogEntry "Successfully changed password for ${username}."
+            }
             Add-Content -Path $ExportUsersFile -Value $username
         } catch {
-            Write-Host "Failed to change password for $username." -ForegroundColor Red
-            Add-LogEntry "Failed to change password for $username"
+            Write-Host "Failed to change password for ${username}. $($_.Exception.Message)" -ForegroundColor Red
+            Add-LogEntry "Failed to change password for ${username}.: $($_.Exception.Message)"
         }
     } elseif (-not $PCRFile) {
-        Write-Host "Generated password for user '$username': $password"
+        Write-Host "Generated password for user '${username}': ${password}"
     }
     
     if ($PCRFile) {
-        Add-Content -Path $PCRFile -Value "$username,$password"
+        Add-Content -Path $PCRFile -Value "${username},${password}"
     }
 }
 

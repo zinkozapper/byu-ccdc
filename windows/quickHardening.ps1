@@ -1,43 +1,36 @@
 #Requires -RunAsAdministrator
 
 param(
+    # Use skip switches: steps run by default unless skipped
     [Parameter(Mandatory=$false)]
-    [switch]$All,
-    
+    [switch]$SkipPasswords,
     [Parameter(Mandatory=$false)]
-    [switch]$Passwords,
-    
+    [switch]$SkipRDP,
     [Parameter(Mandatory=$false)]
-    [switch]$RDP,
-    
+    [switch]$SkipFirewall,
     [Parameter(Mandatory=$false)]
-    [switch]$Firewall,
-    
+    [switch]$SkipSMB,
     [Parameter(Mandatory=$false)]
-    [switch]$SMB,
-    
+    [switch]$SkipExecutionPolicy,
     [Parameter(Mandatory=$false)]
-    [switch]$Patches,
-    
+    [switch]$SkipServices,
     [Parameter(Mandatory=$false)]
-    [switch]$ExecutionPolicy,
-    
+    [switch]$SkipAuditing,
     [Parameter(Mandatory=$false)]
-    [switch]$Services,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$Admins,
+    [switch]$SkipSplunk,
 
-    [Parameter(Mandatory=$false)]
-    [switch]$Splunk,
+    [Parameter(Mandatory=$false, HelpMessage = "Interactive prompts for each step")]
+    [Alias("i")]
+    [switch]$Interactive,
 
-    [Parameter(Mandatory=$false)]
-    [switch]$WhatIf
+    [Parameter(Mandatory=$false, HelpMessage = "Base URL for fetching scripts")]
+    [Alias("url")]
+    [string]$BaseURL = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows/",
+
+    [Parameter(Mandatory=$false, HelpMessage = "Show this help message")]
+    [Alias('h')]
+    [switch]$Help
 )
-
-$ScriptPath = $PSScriptRoot
-$StartTime = Get-Date
-$BaseURL = "https://raw.githubusercontent.com/BYU-CCDC/public-ccdc-resources/main/windows"
 
 function Write-HardeningLog {
     param(
@@ -48,85 +41,149 @@ function Write-HardeningLog {
     Write-Host "[$Timestamp] [$Level] $Message"
 }
 
-function Invoke-HardeningScript {
-    param(
-        [string]$ScriptName,
-        [string]$BaseURL = $BaseURL
-    )
-    
-    $ScriptURL = "$BaseURL/$ScriptName"
-    
-    try {
-        Write-HardeningLog "Downloading $ScriptName from $ScriptURL" "DEBUG"
-        $ScriptContent = (Invoke-WebRequest -Uri $ScriptURL -UseBasicParsing).Content
-        Write-HardeningLog "Executing $ScriptName" "DEBUG"
-        Invoke-Expression $ScriptContent
-    }
-    catch {
-        Write-HardeningLog "Failed to download or execute $ScriptName : $_" "ERROR"
-        throw $_
-    }
-}
+
+$ScriptPath = $PSScriptRoot
+$StartTime = Get-Date
+#Add any other scripts to this array to download them at the start
+$scripts = @("upgradeSMB.ps1","zulu.ps1","configureFirewall.ps1","disableUnnecessaryServices.ps1",
+"hardenRDP.ps1","advancedAuditing.ps1","setupSplunk.ps1","restrictExecutionPolicy.ps1",
+"removeAdmins.ps1", "applyPatches.ps1", "wordlist.txt")
+
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  Quick Hardening Process" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-HardeningLog "Starting Quick Hardening Process" "INFO"
 
+#Help Menu
+if ($Help) {
+    Write-Host ""
+    Write-Host "Usage: .\quickHardening.ps1 [-url <baseurl>] [-SkipSMB] [-SkipPasswords] [-SkipFirewall] [-SkipExecutionPolicy] [-SkipServices] [-SkipRDP] [-SkipAuditing] [-SkipSplunk] [-Interactive] [-h]" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Options:" -ForegroundColor Cyan
+    Write-Host "  -url <url>             Base URL to download scripts (alias: -url)" -ForegroundColor Cyan
+    Write-Host "  -Skip* flags           Skip individual steps (e.g. -SkipSMB)" -ForegroundColor Cyan
+    Write-Host "  -Interactive           Prompt for each step" -ForegroundColor Cyan
+    Write-Host "  -h                     Show this help and exit" -ForegroundColor Cyan
+    Write-Host ""
+    exit 0
+}
+
+# Download dependencies once (fail fast if missing)
+foreach ($script in $scripts) {
+    if (Test-Path "./$script") {
+        Write-Host "$script already exists, skipping download." -ForegroundColor Yellow
+        continue
+    }
+    $url = "$BaseURL/$script"
+    $destination = "./$script"
+
+    Write-Host "Downloading: $script..." -ForegroundColor Cyan
+    
+    Invoke-WebRequest -Uri $url -OutFile $destination
+}
+
+Write-Host "All downloads complete!" -ForegroundColor Green
+
+
 $ExecutedScripts = @()
 
-if ($All -or $ExecutionPolicy) {
-    Write-HardeningLog "Setting Execution Policy..." "INFO"
-    Invoke-HardeningScript "restrictExecutionPolicy.ps1"
-    $ExecutedScripts += "restrictExecutionPolicy.ps1"
+# Determine run flags (default: run unless skipped)
+$RunSMB = -not $SkipSMB
+$RunPasswords = -not $SkipPasswords
+$RunExecutionPolicy = -not $SkipExecutionPolicy
+$RunServices = -not $SkipServices
+$RunFirewall = -not $SkipFirewall
+$RunRDP = -not $SkipRDP
+$RunAuditing = -not $SkipAuditing
+$RunSplunk = -not $SkipSplunk
+
+
+
+# Interactive prompts override defaults when -Interactive / -i is used
+if ($Interactive) {
+    Write-HardeningLog "Interactive mode: prompting for each step" "INFO"
+
+    $ans = Read-Host "Run Upgrade SMB? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunSMB = $false } else { $RunSMB = $true }
+
+    $ans = Read-Host "Run zulu? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunPasswords = $false } else { $RunPasswords = $true }
+
+    $ans = Read-Host "Run Configure Firewall? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunFirewall = $false } else { $RunFirewall = $true }
+
+    $ans = Read-Host "Run Disable Unnecessary Services? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunServices = $false } else { $RunServices = $true }
+
+    $ans = Read-Host "Run Configure RDP? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunRDP = $false } else { $RunRDP = $true }
+
+    $ans = Read-Host "Run Configure Advanced Auditing? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunAuditing = $false } else { $RunAuditing = $true }
+
+    $ans = Read-Host "Run Install Splunk? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunSplunk = $false } else { $RunSplunk = $true }
+
+    $ans = Read-Host "Run Set Execution Policy? [Y/n] (default: Y)"
+    if ($ans -match '^[Nn]') { $RunExecutionPolicy = $false } else { $RunExecutionPolicy = $true }
 }
 
-if ($All -or $Services) {
-    Write-HardeningLog "Disabling Unnecessary Services..." "INFO"
-    Invoke-HardeningScript "disableUnnecessaryServices.ps1"
-    $ExecutedScripts += "disableUnnecessaryServices.ps1"
-}
-
-if ($All -or $SMB) {
+# Step 1: Upgrade SMB
+if ($RunSMB) { 
     Write-HardeningLog "Upgrading SMB..." "INFO"
-    Invoke-HardeningScript "Upgrade-SMB.ps1"
-    $ExecutedScripts += "Upgrade-SMB.ps1"
+    & "./upgradeSMB.ps1"
+    $ExecutedScripts += "upgradeSMB.ps1"
 }
 
-if ($All -or $Firewall) {
-    Write-HardeningLog "Configuring Firewall..." "INFO"
-    Invoke-HardeningScript "Configure-Firewall.ps1"
-    $ExecutedScripts += "Configure-Firewall.ps1"
-}
-
-if ($All -or $Passwords) {
+#Step 2: Change Passwords
+if ($RunPasswords) {
     Write-HardeningLog "Setting Passwords..." "INFO"
-    Invoke-HardeningScript "zulu.ps1"
+    & "./zulu.ps1 -url $BaseURL/wordlist.txt"
     $ExecutedScripts += "zulu.ps1"
 }
 
-if ($All -or $RDP) {
-    Write-HardeningLog "Configuring RDP..." "INFO"
-    Invoke-HardeningScript "Edit-RDP.ps1"
-    $ExecutedScripts += "Edit-RDP.ps1"
+#Step 3: Configure Firewall
+if ($RunFirewall) {
+    Write-HardeningLog "Configuring Firewall..." "INFO"
+    & "./configureFirewall.ps1"
+    $ExecutedScripts += "configureFirewall.ps1"
 }
 
-#if ($All -or $Admins) {
-#    Write-HardeningLog "Removing Unauthorized Admins..." "INFO"
-#    Invoke-HardeningScript "Remove-Admins.ps1"
-#    $ExecutedScripts += "Remove-Admins.ps1"
-#}
+#Step 4: Disable Unnecessary Services
+if ($RunServices) {
+    Write-HardeningLog "Disabling Unnecessary Services..." "INFO"
+    & "./disableUnnecessaryServices.ps1"
+    $ExecutedScripts += "disableUnnecessaryServices.ps1"
+}
 
-#if ($All -or $Patches) {
-#    Write-HardeningLog "Installing Security Patches..." "INFO"
-#    Invoke-HardeningScript "installPatches.ps1"
-#    $ExecutedScripts += "installPatches.ps1"
-#}
+#Step 5: Configure RDP
+if ($RunRDP) {
+    Write-HardeningLog "Configuring RDP..." "INFO"
+    & "./hardenRDP.ps1"
+    $ExecutedScripts += "hardenRDP.ps1"
+}
 
-if ($All -or $Splunk) {
+#Step 6: Configure Advanced Auditing
+if ($RunAuditing) {
+    Write-HardeningLog "Configuring Advanced Auditing..." "INFO"
+    & "./advancedAuditing.ps1"
+    $ExecutedScripts += "advancedAuditing.ps1"
+}
+
+#Step 7: Install Splunk
+if ($RunSplunk) {
     Write-HardeningLog "Installing Splunk..." "INFO"
-    Invoke-HardeningScript "setupSplunk.ps1"
+    & "./setupSplunk.ps1 -url $BaseURL/../splunk/splunk.ps1"
     $ExecutedScripts += "setupSplunk.ps1"
+}
+
+
+#Step 8: Set Execution Policy to restricted
+if ($RunExecutionPolicy) {
+    Write-HardeningLog "Setting Execution Policy..." "INFO"
+    & "./restrictExecutionPolicy.ps1"
+    $ExecutedScripts += "restrictExecutionPolicy.ps1"
 }
 
 $EndTime = Get-Date
